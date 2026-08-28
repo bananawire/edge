@@ -32,7 +32,7 @@ jobs:
         run: |
           sleep 5
           for i in $(seq 1 30); do
-            if curl -fsS http://127.0.0.1:49221/health | grep -q '"status":"UP"'; then
+            if nix develop -c curl -fsS http://127.0.0.1:49221/health | grep -q '"status":"UP"'; then
               echo "Edge started successfully."
               exit 0
             fi
