@@ -22,7 +22,7 @@ jobs:
       - name: Publish Application to /clair/edge
         run: |
           tar --exclude=.git --exclude=.venv --exclude=__pycache__ --exclude='*/__pycache__' --exclude=clair_edge.db -cf - . \
-            | tar -xf - -C /clair/edge
+            | tar --no-same-owner --no-same-permissions --no-overwrite-dir -xf - -C /clair/edge
           install -m 600 /dev/null /clair/edge/.env
           echo "${{ secrets.EDGE_ENV }}" > /clair/edge/.env
           nix develop -c uv sync --frozen --directory /clair/edge
