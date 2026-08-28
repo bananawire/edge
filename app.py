@@ -6,6 +6,7 @@ starts Kafka topic bootstrapping, and launches background consumers.
 
 from flask import Flask, request
 import logging
+import os
 
 from dotenv import load_dotenv
 
@@ -36,6 +37,12 @@ app.register_blueprint(iam_api)
 app.register_blueprint(device_api)
 app.register_blueprint(alerting_api)
 app.register_blueprint(docs_api)
+
+
+@app.get("/health")
+def health():
+    return {"status": "UP"}, 200
+
 
 logger = logging.getLogger(__name__)
 
@@ -100,4 +107,4 @@ def initialize():
 if __name__ == "__main__":
     # Ensure the edge cache is ready even before the first HTTP request.
     initialize()
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", "5000")), debug=False)
