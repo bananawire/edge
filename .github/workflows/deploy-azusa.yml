@@ -21,7 +21,8 @@ jobs:
 
       - name: Publish Application to /clair/edge
         run: |
-          tar --exclude=.git --exclude=.venv --exclude=__pycache__ --exclude='*/__pycache__' --exclude=clair_edge.db -cf - . \
+          tar --exclude=__pycache__ --exclude='*/__pycache__' --exclude=clair_edge.db -cf - \
+            app.py pyproject.toml uv.lock iam device provisioning alerting shared \
             | tar --no-same-owner --no-same-permissions --no-overwrite-dir -xf - -C /clair/edge
           install -m 600 /dev/null /clair/edge/.env
           echo "${{ secrets.EDGE_ENV }}" > /clair/edge/.env
