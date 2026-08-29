@@ -17,7 +17,7 @@ OPENAPI_SPEC = {
     "servers": [{"url": get_edge_public_base_url(), "description": "Edge service"}],
     "tags": [
         {"name": "Telemetry", "description": "Environmental telemetry ingestion from IoT sensors."},
-        {"name": "Commands", "description": "Embedded device command delivery. Commands arrive via Kafka from clair-core."},
+        {"name": "Commands", "description": "Embedded device command delivery. Commands arrive via HTTP from clair-core."},
         {"name": "Alerting", "description": "Embedded-to-core alert condition state transitions (NORMAL/CRITICAL)."},
     ],
     "components": {
@@ -248,7 +248,7 @@ OPENAPI_SPEC = {
             "post": {
                 "tags": ["Commands"],
                 "summary": "Acknowledge embedded command execution",
-                "description": "Persists the embedded ACK locally and publishes it to Kafka for clair-core.",
+                "description": "Persists the embedded ACK locally and publishes it to HTTP for clair-core.",
                 "security": [{"DeviceCredentials": [], "DeviceApiKey": []}],
                 "parameters": [{"name": "commandId", "in": "path", "required": True, "schema": {"type": "string"}}],
                 "requestBody": {

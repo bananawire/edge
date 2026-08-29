@@ -1,6 +1,6 @@
 """DeviceChangedIntegrationEvent — inbound ACL DTO for provisioning updates.
 
-Consumed by the Provisioning bounded context from Kafka topic
+Consumed by the Provisioning bounded context from HTTP topic
 `clair.provisioning.devices.changed` published by clair-core.
 """
 

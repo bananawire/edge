@@ -1,6 +1,6 @@
 # Edge Service — IoT Telemetry Ingestion
 
-Servicio edge para la ingesta de telemetría ambiental (CO2 y PM2.5) desde dispositivos IoT. Valida el estado del dispositivo localmente (cache) y sincroniza telemetría, comandos y presencia con clair-core via Kafka.
+Servicio edge para la ingesta de telemetría ambiental (CO2 y PM2.5) desde dispositivos IoT. Valida el estado del dispositivo localmente (cache) y sincroniza telemetría, comandos y presencia con clair-core via HTTP autenticado.
 
 ## Stack Tecnológico
 
@@ -21,7 +21,7 @@ edge-service/
 ├── app.py                         # Punto de entrada Flask
 ├── iam/                           # Bounded Context: Identity & Access Management
 │   ├── domain/
-│   │   ├── entities.py            # Entidad Device (aggregate root, 7 atributos)
+│   │   ├── entities.py            # Entidad Device (aggregate root, atributos sincronizados)
 │   │   └── services.py            # AuthService: valida credenciales + status sincronizado
 │   ├── application/
 │   │   └── services.py            # AuthApplicationService: orquesta autenticación local
@@ -42,10 +42,10 @@ edge-service/
 │   └── interfaces/
 │       └── api.py                 # Blueprint device_api + POST /api/v1/device/telemetry
 ├── provisioning/                  # Bounded Context: Device Provisioning
-│   ├── application/               # Kafka consumer + ACL contra clair-core
+│   ├── application/               # Pollers HTTP + ACL contra clair-core
 │   ├── domain/                    # Commands, queries y validación de cache
 │   ├── infrastructure/            # Upsert del cache local de devices
-│   └── interfaces/                # Recursos para consumo Kafka
+│   └── interfaces/                # Recursos HTTP del bounded context
 └── shared/                        # Infraestructura compartida
     └── infrastructure/
         └── database.py            # SqliteDatabase(EDGE_DATABASE_PATH || 'clair_edge.db') + init_db()
@@ -75,7 +75,7 @@ uv sync
 uv run python app.py
 ```
 
-El servidor arranca en `http://127.0.0.1:5000` con debug mode activado.
+El servidor arranca en `http://127.0.0.1:5000` con debug desactivado.
 
 ## API Endpoints
 
@@ -131,19 +131,48 @@ curl -X POST http://127.0.0.1:5000/api/v1/device/telemetry \
 
 ## Sincronizacion de Devices
 
-El edge no crea devices de prueba. Recibe los devices maestros desde `clair-core` via Kafka (`clair.provisioning.devices.changed`) y los cachea en SQLite para validar telemetria localmente.
+El edge no crea devices de prueba. Obtiene los devices maestros desde `clair-core` mediante el roster HTTP incremental y los cachea en SQLite para validar telemetría localmente.
 
-La sincronizacion es reactiva via Kafka: el core publica cambios y el edge los consume en tiempo real.
+La sincronización usa polling periódico con watermark persistido; las notificaciones HTTP del core solo aceleran el siguiente ciclo.
 
 Variables relevantes:
 
 | Variable | Default | Descripción |
 |---|---|---|
 | `EDGE_DATABASE_PATH` | `clair_edge.db` | Ruta del SQLite local del edge |
-| `KAFKA_BOOTSTRAP_SERVERS` | `localhost:9092` | Broker Kafka para comunicacion edge <-> core |
+| `CLAIR_CORE_BASE_URL` | `https://core.example.internal` | URL base de clair-core (HTTPS fuera de localhost) |
+| `EDGE_TO_CORE_TOKEN` | (requerido) | Token para llamadas edge → core |
+| `EDGE_TOKEN` | (requerido) | Token para notificaciones core → edge |
+| `DEVICE_ROSTER_POLL_INTERVAL_SECONDS` | `30` | Intervalo del roster |
+| `EDGE_COMMAND_POLL_INTERVAL_SECONDS` | `5` | Intervalo de comandos |
+| `EDGE_ALERT_POLL_INTERVAL_SECONDS` | `5` | Intervalo de alertas |
+| `EDGE_PRESENCE_POLL_INTERVAL_SECONDS` | `5` | Intervalo de presencia |
+| `EDGE_OUTBOX_POLL_INTERVAL_SECONDS` | `5` | Intervalo del outbox |
 | `EDGE_PUBLIC_BASE_URL` | `http://127.0.0.1:5000` | Base URL para el OpenAPI `servers` (docs) |
 
 Este proyecto soporta archivo `.env` (cargado al iniciar via `python-dotenv`). Usa `.env.example` como base.
+
+## Operación, migraciones y rollback
+
+`init_db()` aplica migraciones locales idempotentes al arrancar: conserva el
+catálogo, añade `deleted`/`updated_at` y crea `sync_watermark`. El roster usa
+ese watermark para reanudar sincronización tras una caída; si core no está
+disponible, el edge continúa sirviendo con su caché anterior.
+
+Antes de operar en un entorno no local, configura ambos tokens con secretos
+fuertes y una URL HTTPS de core. Los intervalos de workers se pueden ajustar
+mediante las variables del archivo `.env.example`; valores inválidos o menores
+que 0.1 segundos se corrigen de forma segura.
+
+Si el transporte HTTP del outbox falla después del corte, aplica este
+rollback acotado, sin borrar datos: (1) detén el proceso del edge; (2) haz una
+copia de `EDGE_DATABASE_PATH`; (3) restaura el artefacto edge versionado
+anterior que el operador haya identificado como compatible con el contrato
+HTTP; (4) inicia el proceso y verifica `/health`; (5) revisa que
+`device_outbox` conserve sus entradas pendientes. No se restaura un broker ni
+se elimina `device_outbox`: el rollback conserva los pollers independientes y
+permite reintentar telemetría cuando el transporte corregido vuelva a estar
+disponible.
 
 ## Inspeccionar la Base de Datos
 

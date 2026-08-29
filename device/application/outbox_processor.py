@@ -1,7 +1,7 @@
-"""TelemetryOutboxProcessor — background worker for guaranteed Kafka delivery.
+"""TelemetryOutboxProcessor — background worker for guaranteed HTTP delivery.
 
 Implements the outbox pattern with exponential backoff and circuit breaker
-protection for publishing telemetry integration events to Kafka.
+protection for publishing telemetry integration events to HTTP.
 """
 
 import logging
@@ -21,15 +21,16 @@ from device.infrastructure.reliability.circuit_breaker import (
     CircuitBreakerOpenException,
 )
 from shared.infrastructure.database import db
+from shared.infrastructure.environment import get_positive_interval
 
 logger = logging.getLogger(__name__)
 
 
 class TelemetryOutboxProcessor:
-    """Background processor that polls the outbox and publishes to Kafka.
+    """Background processor that polls the outbox and publishes to HTTP.
 
     Guarantees at-least-once delivery by retrying with exponential backoff.
-    Protects Kafka from overload via circuit breaker.
+    Protects HTTP from overload via circuit breaker.
     """
 
     MAX_RETRIES = 5
@@ -65,6 +66,9 @@ class TelemetryOutboxProcessor:
 
     def _run(self) -> None:
         """Main loop with per-iteration DB connection management."""
+        interval = get_positive_interval(
+            "EDGE_OUTBOX_POLL_INTERVAL_SECONDS", self.POLL_INTERVAL_SECONDS
+        )
         while self._running:
             try:
                 if db.is_closed():
@@ -79,10 +83,10 @@ class TelemetryOutboxProcessor:
             finally:
                 if not db.is_closed():
                     db.close()
-            time.sleep(self.POLL_INTERVAL_SECONDS)
+            time.sleep(interval)
 
     def _process_batch(self) -> None:
-        """Fetch and attempt to publish pending outbox entries to Kafka."""
+        """Fetch and attempt to publish pending outbox entries to HTTP."""
         entries = self.outbox_repository.find_pending(limit=self.BATCH_SIZE)
         if not entries:
             return
@@ -101,7 +105,7 @@ class TelemetryOutboxProcessor:
                 )
 
     def _send_entry(self, entry: OutboxEntry) -> bool:
-        """Attempt to publish a single outbox entry to Kafka.
+        """Attempt to publish a single outbox entry to HTTP.
 
         Args:
             entry: OutboxEntry to publish.
@@ -111,12 +115,14 @@ class TelemetryOutboxProcessor:
         """
         payload = self._build_payload(entry)
         try:
-            self.circuit_breaker.call(
+            published = self.circuit_breaker.call(
                 self.external_core_service.publish_telemetry_recorded,
                 payload,
             )
+            if not published:
+                raise RuntimeError("Core rejected telemetry delivery")
             self.outbox_repository.mark_sent(entry.id)
-            logger.info("Outbox entry %s published to Kafka", entry.id)
+            logger.info("Outbox entry %s published to HTTP", entry.id)
             return True
         except CircuitBreakerOpenException:
             raise
@@ -151,6 +157,7 @@ class TelemetryOutboxProcessor:
             raise ValueError(f"Telemetry record not found: {entry.aggregate_id}")
 
         return {
+            "client_ref": str(entry.id),
             "device_id": record.device_id,
             "device_time": record.device_time,
             "uptime_seconds": record.uptime_seconds,

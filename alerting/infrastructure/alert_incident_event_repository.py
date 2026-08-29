@@ -36,6 +36,13 @@ class AlertIncidentEventRepository:
         )
 
     @staticmethod
+    def find_by_alert_id(alert_id: str, hardware_id: str):
+        return AlertIncidentEventModel.get_or_none(
+            (AlertIncidentEventModel.alert_id == str(alert_id))
+            & (AlertIncidentEventModel.hardware_id == hardware_id)
+        )
+
+    @staticmethod
     def find_pending_for_hardware_id(hardware_id: str, limit: int = 50) -> list[AlertIncidentEventModel]:
         return list(
             AlertIncidentEventModel.select()

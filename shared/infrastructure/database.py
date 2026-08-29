@@ -16,7 +16,7 @@ def _migrate_remove_device_secret():
 
     Renamed to api_key; this migration cleans up the old column.
     If the database engine does not support DROP COLUMN, the entire
-    table is dropped and recreated (data will be re-synced from Kafka).
+    table is dropped and recreated (data will be re-synced from HTTP).
     """
     from peewee import OperationalError
 
@@ -36,7 +36,7 @@ def _migrate_remove_device_secret():
         db.execute_sql("ALTER TABLE devices DROP COLUMN device_secret")
     except OperationalError:
         # SQLite < 3.35.0 does not support DROP COLUMN.
-        # Drop the whole table; data will be re-synced from Kafka.
+        # Drop the whole table; data will be re-synced from HTTP.
         db.execute_sql("DROP TABLE IF EXISTS devices")
 
 
@@ -87,6 +87,20 @@ def _migrate_outbox_schema():
         db.execute_sql("DROP TABLE IF EXISTS device_outbox")
 
 
+def _migrate_device_cache_schema():
+    """Add roster columns without dropping data from existing edge databases."""
+    cursor = db.execute_sql(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='devices'"
+    )
+    if not cursor.fetchone():
+        return
+    columns = {row[1] for row in db.execute_sql("PRAGMA table_info(devices)").fetchall()}
+    if "deleted" not in columns:
+        db.execute_sql("ALTER TABLE devices ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0")
+    if "updated_at" not in columns:
+        db.execute_sql("ALTER TABLE devices ADD COLUMN updated_at DATETIME")
+
+
 def init_db():
     """Initialize the database by creating all tables if they don't exist.
 
@@ -100,8 +114,10 @@ def init_db():
         from device.infrastructure.models import DeviceCommandModel, DeviceTelemetryModel
         from device.infrastructure.outbox.outbox_record_model import OutboxRecordModel
         from alerting.infrastructure.models import AlertIncidentEventModel
+        from shared.infrastructure.models import SyncWatermarkModel
 
         _migrate_remove_device_secret()
+        _migrate_device_cache_schema()
         _migrate_telemetry_schema()
         _migrate_outbox_schema()
         db.create_tables(
@@ -111,6 +127,7 @@ def init_db():
                 DeviceCommandModel,
                 OutboxRecordModel,
                 AlertIncidentEventModel,
+                SyncWatermarkModel,
             ],
             safe=True,
         )

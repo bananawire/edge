@@ -7,7 +7,7 @@ with infrastructure repositories.
 import logging
 from datetime import datetime, timezone
 
-from iam.application.outboundservices.acl.kafka_presence_publisher import KafkaPresencePublisher
+from iam.application.outboundservices.acl.core_presence_http_publisher import CorePresenceHttpPublisher
 from iam.domain.events import DevicePresenceChangedEvent
 from iam.domain.services import AuthService
 from iam.infrastructure.repositories import DeviceRepository
@@ -41,11 +41,11 @@ class AuthApplicationService:
 
 
 class DevicePresenceApplicationService:
-    """Application service for publishing edge-detected presence transitions via Kafka."""
+    """Application service for publishing edge-detected presence transitions via HTTP."""
 
     def __init__(self):
         self.device_repository = DeviceRepository()
-        self.kafka_presence_publisher = KafkaPresencePublisher()
+        self.core_presence_publisher = CorePresenceHttpPublisher()
 
     def mark_seen(self, hardware_id: str) -> None:
         """Mark a device ONLINE from telemetry and publish the transition if needed."""
@@ -76,7 +76,7 @@ class DevicePresenceApplicationService:
             "status": event.status,
             "occurred_at": event.occurred_at.isoformat(),
         }
-        if not self.kafka_presence_publisher.publish_device_presence_changed(payload):
+        if not self.core_presence_publisher.publish_device_presence_changed(payload):
             logger.warning(
                 "Failed to publish %s presence event for hardware_id=%s",
                 event.status,

@@ -1,35 +1,32 @@
 """Edge Service — Flask application entry point.
 
-Registers bounded-context blueprints, initializes the SQLite database,
-starts Kafka topic bootstrapping, and launches background consumers.
+Registers bounded-context blueprints, initializes SQLite, and starts the
+reliable telemetry outbox and local presence monitor. Core synchronization
+pollers can be added to this composition as their HTTP contracts land.
 """
 
-from flask import Flask, request
 import logging
 import os
+import hmac
 
 from dotenv import load_dotenv
+from flask import Flask, request
 
 load_dotenv()
 
-from device.application.kafka_command_consumer import KafkaCommandConsumer
-from device.application.outbox_processor import TelemetryOutboxProcessor
-from device.infrastructure.kafka.device_kafka_topics import DeviceKafkaTopics
-from device.interfaces.api import device_api
-from alerting.infrastructure.kafka.alerting_kafka_topics import AlertingKafkaTopics
 from alerting.interfaces.api import alerting_api
-from alerting.application.kafka_alert_incident_consumer import KafkaAlertIncidentConsumer
+from alerting.application.alert_poller import AlertIncidentPoller
+from device.application.command_poller import DeviceCommandPoller
+from device.application.outbox_processor import TelemetryOutboxProcessor
+from device.interfaces.api import device_api
 from iam.application.device_presence_monitor import DevicePresenceMonitor
-from iam.infrastructure.kafka.iam_kafka_topics import IamKafkaTopics
 from iam.interfaces.services import iam_api
-from provisioning.application.kafka_provisioning_consumer import KafkaProvisioningConsumer
-from provisioning.infrastructure.kafka.provisioning_kafka_topics import ProvisioningKafkaTopics
+from provisioning.application.device_roster_poller import DeviceRosterPoller
 from shared.infrastructure.database import init_db
 from shared.infrastructure.environment import (
     get_edge_cors_allowed_headers,
     get_edge_cors_allowed_origins,
 )
-from shared.infrastructure.kafka_client import KafkaInfrastructureClient
 from shared.interfaces.docs_api import docs_api
 
 app = Flask(__name__)
@@ -45,23 +42,39 @@ def health():
 
 
 logger = logging.getLogger(__name__)
-
 _initialized = False
 _outbox_processor = TelemetryOutboxProcessor()
-_command_consumer = KafkaCommandConsumer()
 _device_presence_monitor = DevicePresenceMonitor()
-_provisioning_consumer = KafkaProvisioningConsumer()
-_alert_incident_consumer = KafkaAlertIncidentConsumer()
+_device_roster_poller = DeviceRosterPoller()
+_command_poller = DeviceCommandPoller()
+_alert_poller = AlertIncidentPoller()
 
 
-def _collect_all_topics() -> list:
-    """Gather topic definitions from every bounded context."""
-    return (
-        DeviceKafkaTopics.all()
-        + AlertingKafkaTopics.all()
-        + IamKafkaTopics.all()
-        + ProvisioningKafkaTopics.all()
-    )
+@app.post("/api/v1/edge/notify")
+def edge_notify():
+    """Accept a lightweight core notification and pull the authoritative roster."""
+    # Core authenticates in the core->edge direction with EDGE_TOKEN.
+    expected = os.getenv("EDGE_TOKEN", "")
+    supplied = request.headers.get("X-Edge-Token", "")
+    if not expected or not hmac.compare_digest(supplied, expected):
+        return {"error": "Unauthorized"}, 401
+    payload = request.get_json(silent=True)
+    if payload is None:
+        payload = {}
+    if not isinstance(payload, dict):
+        return {"error": "JSON body must be an object"}, 400
+    resource = payload.get("resource")
+    if resource not in ("device", "command", "alert"):
+        return {"error": "Unsupported resource"}, 400
+    # Event.set() only wakes the already-running daemon; it never performs
+    # network or database work on the request thread.
+    if resource == "device":
+        _device_roster_poller.trigger()
+    elif resource == "command":
+        _command_poller.trigger()
+    else:
+        _alert_poller.trigger()
+    return {"status": "accepted"}, 200
 
 
 @app.after_request
@@ -69,13 +82,11 @@ def add_cors_headers(response):
     """Allow browser clients to call the edge API with device auth headers."""
     allowed_origins = get_edge_cors_allowed_origins()
     request_origin = request.headers.get("Origin")
-
     if "*" in allowed_origins:
         response.headers["Access-Control-Allow-Origin"] = "*"
     elif request_origin in allowed_origins:
         response.headers["Access-Control-Allow-Origin"] = request_origin
         response.headers.add("Vary", "Origin")
-
     response.headers["Access-Control-Allow-Methods"] = "GET,POST,OPTIONS"
     response.headers["Access-Control-Allow-Headers"] = get_edge_cors_allowed_headers()
     response.headers["Access-Control-Max-Age"] = "86400"
@@ -84,27 +95,18 @@ def add_cors_headers(response):
 
 @app.before_request
 def initialize():
-    """Initialize database, bootstrap Kafka topics, and start background workers."""
+    """Initialize persistence and start edge-local background workers once."""
     global _initialized
     if not _initialized:
         init_db()
-
-        # Bootstrap Kafka topics from each bounded context's own registry
-        try:
-            kafka_client = KafkaInfrastructureClient()
-            kafka_client.bootstrap_topics(_collect_all_topics())
-        except Exception as exc:
-            logger.warning("Kafka topic bootstrap failed: %s", exc)
-
         _outbox_processor.start()
-        _command_consumer.start()
-        _provisioning_consumer.start()
         _device_presence_monitor.start()
-        _alert_incident_consumer.start()
+        _device_roster_poller.start()
+        _command_poller.start()
+        _alert_poller.start()
         _initialized = True
 
 
 if __name__ == "__main__":
-    # Ensure the edge cache is ready even before the first HTTP request.
     initialize()
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", "5000")), debug=False)

@@ -1,6 +1,6 @@
 """DeviceCommandAcknowledgedIntegrationEvent — outbound ACL DTO for command ACKs.
 
-Published by the Device bounded context to Kafka topic
+Published by the Device bounded context to HTTP topic
 `clair.device.commands.acknowledged` for consumption by clair-core.
 """
 

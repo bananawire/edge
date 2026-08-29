@@ -18,10 +18,11 @@ class Device:
     """
 
     def __init__(self, device_id, hardware_id, api_key, status, created_at,
-                 last_seen_at=None):
+                 last_seen_at=None, deleted=False):
         self.device_id = device_id
         self.hardware_id = hardware_id
         self.api_key = api_key
         self.status = status
         self.created_at = created_at
         self.last_seen_at = last_seen_at
+        self.deleted = deleted

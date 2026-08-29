@@ -1,11 +1,12 @@
 """Shared environment configuration.
 
-All integration with clair-core is now via Kafka.  Environment helpers
+All integration with clair-core is now via HTTP.  Environment helpers
 are stateless and context-agnostic.
 """
 
 from __future__ import annotations
 
+import math
 import os
 
 
@@ -16,6 +17,18 @@ def _optional(name: str, default: str) -> str:
 
 def get_edge_database_path() -> str:
     return os.getenv("EDGE_DATABASE_PATH", "clair_edge.db").strip() or "clair_edge.db"
+
+
+def get_positive_interval(name: str, default: float, minimum: float = 0.1) -> float:
+    """Read a worker interval safely, preventing a busy loop from bad config."""
+    raw = os.getenv(name)
+    try:
+        value = float(raw) if raw is not None else default
+    except (TypeError, ValueError):
+        value = default
+    if not math.isfinite(value):
+        value = default
+    return max(value, minimum)
 
 
 def get_edge_public_base_url() -> str:
@@ -40,14 +53,3 @@ def get_edge_cors_allowed_headers() -> str:
         "EDGE_CORS_ALLOWED_HEADERS",
         "Content-Type,X-Hardware-Id,X-API-Key",
     ).strip()
-
-
-def get_kafka_bootstrap_servers() -> list[str]:
-    """Return Kafka bootstrap servers as a list of host:port strings.
-
-    Defaults to localhost:9092 for development.
-    """
-    raw = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092").strip()
-    if not raw:
-        return ["localhost:9092"]
-    return [s.strip() for s in raw.split(",") if s.strip()]

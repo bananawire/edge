@@ -32,13 +32,18 @@ namespace application {
         -_normalize_payload(payload)
     }
 
-    class KafkaProvisioningConsumer {
-        -provisioning_service
-        -consumer
+    class DeviceRosterPoller {
+        -client
+        -service
+        -watermark
+        -_running
+        -_thread
+        -_trigger
         +start()
         +stop()
+        +trigger()
+        +sync_once()
         -_run()
-        -_handle_message(payload)
     }
 
     class DeviceChangedIntegrationEvent {
@@ -81,16 +86,25 @@ namespace infrastructure {
         +last_seen_at
     }
 
-    class ProvisioningKafkaTopics {
-        +DEVICES_CHANGED
-        +DEVICES_SYNC_REQUESTED
-        +all()
+    class CoreHttpClient {
+        -base_url
+        -token
+        -timeout
+        -opener
+        +get(path, params)
+        +post(path, body, accept_conflict)
+    }
+
+    class SyncWatermarkModel {
+        +resource
+        +value
     }
 }
 
 %% Relationships
-KafkaProvisioningConsumer --> DeviceProvisioningApplicationService : uses
-KafkaProvisioningConsumer --> ProvisioningKafkaTopics : uses
+DeviceRosterPoller --> DeviceProvisioningApplicationService : uses
+DeviceRosterPoller --> CoreHttpClient : uses
+DeviceRosterPoller --> SyncWatermarkModel : reads/writes
 
 DeviceProvisioningApplicationService --> DeviceCacheService : uses
 DeviceProvisioningApplicationService --> DeviceCacheRepositoryInterface : uses
@@ -139,13 +153,18 @@ namespace application {
         -_normalize_payload(payload)
     }
 
-    class KafkaProvisioningConsumer {
-        -provisioning_service
-        -consumer
+    class DeviceRosterPoller {
+        -client
+        -service
+        -watermark
+        -_running
+        -_thread
+        -_trigger
         +start()
         +stop()
+        +trigger()
+        +sync_once()
         -_run()
-        -_handle_message(payload)
     }
 
     class DeviceChangedIntegrationEvent {
@@ -164,7 +183,7 @@ namespace application {
 }
 
 %% Relationships strictly inside Application Layer
-KafkaProvisioningConsumer --> DeviceProvisioningApplicationService : uses
+DeviceRosterPoller --> DeviceProvisioningApplicationService : uses
 ```
 
 ---
@@ -211,10 +230,18 @@ namespace infrastructure {
         +last_seen_at
     }
 
-    class ProvisioningKafkaTopics {
-        +DEVICES_CHANGED
-        +DEVICES_SYNC_REQUESTED
-        +all()
+    class CoreHttpClient {
+        -base_url
+        -token
+        -timeout
+        -opener
+        +get(path, params)
+        +post(path, body, accept_conflict)
+    }
+
+    class SyncWatermarkModel {
+        +resource
+        +value
     }
 }
 
