@@ -13,5 +13,5 @@ class CoreContextFacade(ABC):
 
     @abstractmethod
     def publish_command_acknowledged(self, payload: dict) -> bool:
-        """Publish a command acknowledgement integration event to clair-core."""
+        """Deliver a queued command ACK integration event asynchronously to clair-core."""
         ...

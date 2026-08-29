@@ -174,6 +174,11 @@ se elimina `device_outbox`: el rollback conserva los pollers independientes y
 permite reintentar telemetría cuando el transporte corregido vuelva a estar
 disponible.
 
+Las entradas legacy sin snapshot inmutable no se reconstruyen desde aggregates
+mutables: el worker las marca `dead_letter` y registra que requieren replay
+manual desde un payload confiable. Las entradas nuevas siempre guardan el
+snapshot en la misma transacción que el ACK o la telemetría.
+
 ## Inspeccionar la Base de Datos
 
 ```bash

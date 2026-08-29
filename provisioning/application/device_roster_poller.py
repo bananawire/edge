@@ -68,6 +68,7 @@ class DeviceRosterPoller:
     def sync_once(self):
         initial_since = self.watermark
         since, after_id = initial_since, None
+        processed_pages = 0
         try:
             while True:
                 response = self.client.get(
@@ -80,9 +81,12 @@ class DeviceRosterPoller:
                 if not isinstance(devices, list):
                     return False
                 self.service.sync_from_roster(devices)
+                # The service may legitimately apply zero records when every
+                # item is stale. The server cursor was nevertheless processed.
+                processed_pages += 1
                 if not response.get("has_more", response.get("hasMore", False)):
                     watermark = response.get("watermark")
-                    if watermark is not None:
+                    if watermark is not None and processed_pages > 0:
                         self._save_watermark(str(watermark))
                     return True
                 next_since = response.get("next_since", response.get("nextSince"))

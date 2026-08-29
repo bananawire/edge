@@ -51,14 +51,13 @@ class HttpCoreContextFacadeImpl(CoreContextFacade):
         return results[0].get("status") == "CREATED"
 
     def publish_command_acknowledged(self, payload: dict) -> bool:
-        """Deliver a command acknowledgement; 409 is an idempotent success."""
+        """Deliver a queued command ACK; 409 is an idempotent success."""
         command_id = payload.get("command_id")
         if not command_id:
             return False
         result = "OK" if payload.get("status") in {"EXECUTED", "OK"} else "FAILED"
         body = {
             "hardware_id": payload.get("hardware_id"),
-            "acknowledged_at": payload.get("acknowledged_at"),
             "result": result,
             "detail": payload.get("failure_reason"),
         }

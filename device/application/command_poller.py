@@ -3,8 +3,6 @@ from __future__ import annotations
 import logging
 import os
 import threading
-from datetime import datetime, timezone
-from urllib.parse import quote
 from device.application.services import DeviceCommandApplicationService
 from shared.infrastructure.core_http_client import CoreHttpClient
 from shared.infrastructure.environment import get_positive_interval
@@ -33,26 +31,9 @@ class DeviceCommandPoller:
         if not isinstance(messages, list):
             return 0
         ingested = self.service.ingest_command_messages(messages)
-        # ACK only entities accepted by the application service.  In particular,
-        # malformed commands and commands for unknown devices are not confirmed
-        # in core and remain eligible for operational investigation/retry.
-        for command in ingested:
-            command_id = getattr(command, "command_id", None)
-            hardware_id = getattr(command, "hardware_id", None)
-            if not command_id or not hardware_id:
-                continue
-            acknowledged = self.client.post(
-                f"/api/v1/edge/commands/{quote(str(command_id), safe='')}/ack",
-                {
-                    "hardware_id": hardware_id,
-                    "acknowledged_at": datetime.now(timezone.utc).isoformat(),
-                    "result": "OK",
-                    "detail": None,
-                },
-                accept_conflict=True,
-            )
-            if acknowledged is None:
-                logger.warning("Command ACK failed for %s", command_id)
+        # Ingestion is deliberately not an acknowledgement.  Only the embedded
+        # device, after executing the command, may acknowledge it via the device
+        # ACK endpoint; otherwise Core would mark commands executed prematurely.
         return len(ingested)
     def _run(self):
         while self._running:

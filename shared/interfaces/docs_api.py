@@ -144,7 +144,6 @@ OPENAPI_SPEC = {
                     "payload": {"type": "string", "nullable": True},
                     "receivedAt": {"type": "string", "format": "date-time"},
                     "deliveredAt": {"type": "string", "format": "date-time", "nullable": True},
-                    "acknowledgedAt": {"type": "string", "format": "date-time", "nullable": True},
                     "failureReason": {"type": "string", "nullable": True},
                 },
             },
@@ -248,7 +247,7 @@ OPENAPI_SPEC = {
             "post": {
                 "tags": ["Commands"],
                 "summary": "Acknowledge embedded command execution",
-                "description": "Persists the embedded ACK locally and publishes it to HTTP for clair-core.",
+                "description": "Persists the embedded ACK locally and enqueues an immutable event in the asynchronous outbox for delivery to clair-core.",
                 "security": [{"DeviceCredentials": [], "DeviceApiKey": []}],
                 "parameters": [{"name": "commandId", "in": "path", "required": True, "schema": {"type": "string"}}],
                 "requestBody": {
@@ -256,7 +255,7 @@ OPENAPI_SPEC = {
                     "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AcknowledgeDeviceCommandRequest"}}},
                 },
                 "responses": {
-                    "200": {"description": "Command acknowledged.", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/DeviceCommand"}}}},
+                    "200": {"description": "Command ACK persisted locally and queued for asynchronous outbox delivery.", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/DeviceCommand"}}}},
                     "400": {"description": "Invalid ACK or unknown command.", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorResponse"}}}},
                     "401": {"description": "Missing or invalid device credentials.", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorResponse"}}}},
                 },

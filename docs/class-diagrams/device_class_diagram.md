@@ -118,11 +118,10 @@ namespace domain {
         +payload
         +received_at
         +delivered_at
-        +acknowledged_at
         +failure_reason
         +mark_delivered_to_embedded(delivered_at)
-        +mark_executed(acknowledged_at)
-        +mark_failed(acknowledged_at, failure_reason)
+        +mark_executed()
+        +mark_failed(failure_reason)
     }
 
     class OutboxEntry {
@@ -252,7 +251,6 @@ namespace infrastructure {
         +payload
         +received_at
         +delivered_at
-        +acknowledged_at
         +failure_reason
     }
 
@@ -486,11 +484,10 @@ namespace domain {
         +payload
         +received_at
         +delivered_at
-        +acknowledged_at
         +failure_reason
         +mark_delivered_to_embedded(delivered_at)
-        +mark_executed(acknowledged_at)
-        +mark_failed(acknowledged_at, failure_reason)
+        +mark_executed()
+        +mark_failed(failure_reason)
     }
 
     class OutboxEntry {
@@ -642,7 +639,6 @@ namespace infrastructure {
         +payload
         +received_at
         +delivered_at
-        +acknowledged_at
         +failure_reason
     }
 

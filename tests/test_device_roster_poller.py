@@ -49,6 +49,15 @@ class DeviceRosterPollerTests(unittest.TestCase):
         self.assertEqual(service.sync_from_roster.call_count, 2)
         self.assertEqual(poller.watermark, "w1")
 
+    def test_zero_applied_stale_page_still_advances_watermark(self):
+        client = Mock()
+        client.get.return_value = {"devices": [{"device_id": "old"}], "has_more": False, "watermark": "w-stale"}
+        service = Mock()
+        service.sync_from_roster.return_value = 0
+        poller = DeviceRosterPoller(client, service)
+        self.assertTrue(poller.sync_once())
+        self.assertEqual(poller.watermark, "w-stale")
+
     def test_tombstone_is_forwarded_to_application_service(self):
         client = Mock()
         client.get.return_value = {

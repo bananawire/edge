@@ -73,20 +73,6 @@ def _migrate_telemetry_schema():
         db.execute_sql("DROP TABLE IF EXISTS device_telemetry")
 
 
-def _migrate_outbox_schema():
-    """Recreate device_outbox if it still stores duplicated JSON payloads."""
-    cursor = db.execute_sql(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='device_outbox'"
-    )
-    if not cursor.fetchone():
-        return
-
-    col_cursor = db.execute_sql("PRAGMA table_info(device_outbox)")
-    columns = {row[1] for row in col_cursor.fetchall()}
-    if "payload" in columns or "api_key" in columns or "device_id" in columns:
-        db.execute_sql("DROP TABLE IF EXISTS device_outbox")
-
-
 def _migrate_device_cache_schema():
     """Add roster columns without dropping data from existing edge databases."""
     cursor = db.execute_sql(
@@ -113,19 +99,20 @@ def init_db():
         from iam.infrastructure.models import DeviceModel
         from device.infrastructure.models import DeviceCommandModel, DeviceTelemetryModel
         from device.infrastructure.outbox.outbox_record_model import OutboxRecordModel
+        from device.infrastructure.outbox.outbox_payload_snapshot_model import OutboxPayloadSnapshotModel
         from alerting.infrastructure.models import AlertIncidentEventModel
         from shared.infrastructure.models import SyncWatermarkModel
 
         _migrate_remove_device_secret()
         _migrate_device_cache_schema()
         _migrate_telemetry_schema()
-        _migrate_outbox_schema()
         db.create_tables(
             [
                 DeviceModel,
                 DeviceTelemetryModel,
                 DeviceCommandModel,
                 OutboxRecordModel,
+                OutboxPayloadSnapshotModel,
                 AlertIncidentEventModel,
                 SyncWatermarkModel,
             ],
