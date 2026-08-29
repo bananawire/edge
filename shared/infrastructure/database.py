@@ -107,7 +107,7 @@ def init_db():
     Uses deferred imports to avoid circular dependencies between
     bounded context modules.
     """
-    db.connect()
+    db.connect(reuse_if_open=True)
     try:
         # Deferred imports to avoid circular dependencies
         from iam.infrastructure.models import DeviceModel
