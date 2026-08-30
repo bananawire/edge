@@ -21,6 +21,9 @@ from device.domain.outbox_entry import OutboxEntry
 from iam.application.outboundservices.acl.core_presence_http_publisher import CorePresenceHttpPublisher
 from provisioning.application.device_roster_poller import DeviceRosterPoller
 from alerting.application.alert_poller import AlertIncidentPoller
+from alerting.application.services.alert_incident_event_application_service import (
+    AlertIncidentEventApplicationService,
+)
 from shared.infrastructure.core_http_client import CoreHttpClient
 from shared.infrastructure.environment import get_positive_interval
 from device.infrastructure.outbox.outbox_repository import OutboxRepository
@@ -248,6 +251,41 @@ class HttpAdapterTests(unittest.TestCase):
         from device.application.command_poller import DeviceCommandPoller
         self.assertEqual(DeviceCommandPoller(client, Service()).poll_once(), 1)
         self.assertEqual(client.acks, [])
+
+    def test_alert_transition_is_updated_and_redelivered_to_embedded(self):
+        service = AlertIncidentEventApplicationService()
+        service._repository = MagicMock()
+        existing = SimpleNamespace(id=7, status="ACTIVE")
+        service._repository.find_by_alert_id.return_value = existing
+        service._repository.update_from_integration_payload.return_value = SimpleNamespace(id=7)
+        payload = {
+            "alert_id": "alert-1",
+            "device_id": "device-1",
+            "hardware_id": "HW-1",
+            "metric": "CO2",
+            "status": "RESOLVED",
+            "occurred_at": "2024-01-01T00:00:00Z",
+            "resolved_at": "2024-01-01T00:05:00Z",
+        }
+
+        with patch(
+            "alerting.application.services.alert_incident_event_application_service.db.atomic"
+        ):
+            result = service.ingest_alert_incident_changed_event(payload)
+
+        self.assertTrue(result.stored)
+        updated_payload = service._repository.update_from_integration_payload.call_args.args[1]
+        self.assertEqual(updated_payload["status"], "RESOLVED")
+        self.assertIsNotNone(updated_payload["resolved_at"])
+
+        existing.status = "RESOLVED"
+        service._repository.update_from_integration_payload.reset_mock()
+        with patch(
+            "alerting.application.services.alert_incident_event_application_service.db.atomic"
+        ):
+            duplicate = service.ingest_alert_incident_changed_event(payload)
+        self.assertFalse(duplicate.stored)
+        service._repository.update_from_integration_payload.assert_not_called()
 
     def test_alert_poller_ingests_each_payload(self):
         class Client:

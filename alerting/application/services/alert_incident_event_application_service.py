@@ -38,7 +38,14 @@ class AlertIncidentEventApplicationService:
                 normalized["alert_id"], normalized["hardware_id"]
             )
             if existing is not None:
-                return IngestAlertIncidentEventResult(stored=False, event_id=existing.id)
+                if existing.status == normalized["status"]:
+                    return IngestAlertIncidentEventResult(stored=False, event_id=existing.id)
+                model = self._repository.update_from_integration_payload(
+                    existing,
+                    normalized,
+                    received_at=datetime.now(timezone.utc),
+                )
+                return IngestAlertIncidentEventResult(stored=True, event_id=model.id)
             model = self._repository.create_from_integration_payload(
                 normalized,
                 received_at=datetime.now(timezone.utc),
