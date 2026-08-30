@@ -28,7 +28,7 @@ namespace application {
 
     class DevicePresenceApplicationService {
         -device_repository
-        -kafka_presence_publisher
+        -core_presence_publisher
         +mark_seen(hardware_id)
         +mark_stale_devices_offline(offline_before)
         -_publish_presence(device, occurred_at)
@@ -41,11 +41,12 @@ namespace application {
         -_run()
     }
 
-    class KafkaPresencePublisher {
-        -kafka_client
-        -producer
+    class CorePresenceHttpPublisher {
+        -base_url
+        -token
+        -timeout
+        -_opener
         +publish_device_presence_changed(payload)
-        +close()
     }
 }
 
@@ -98,10 +99,6 @@ namespace infrastructure {
         +last_seen_at
     }
 
-    class IamKafkaTopics {
-        +DEVICE_PRESENCE_CHANGED
-        +all()
-    }
 }
 
 %% Relationships
@@ -114,7 +111,7 @@ AuthApplicationService --> AuthService : uses
 AuthApplicationService --> DeviceRepositoryInterface : uses
 
 DevicePresenceApplicationService --> DeviceRepositoryInterface : uses
-DevicePresenceApplicationService --> KafkaPresencePublisher : uses
+DevicePresenceApplicationService --> CorePresenceHttpPublisher : uses
 DevicePresenceApplicationService --> DevicePresenceChangedEvent : instantiates
 
 AuthService --> Device : validates
@@ -123,7 +120,6 @@ DeviceRepository ..|> DeviceRepositoryInterface : implements
 DeviceRepository --> DeviceModel : maps
 DeviceRepository --> Device : returns
 
-KafkaPresencePublisher --> IamKafkaTopics : uses
 ```
 
 ---
@@ -162,7 +158,7 @@ namespace application {
 
     class DevicePresenceApplicationService {
         -device_repository
-        -kafka_presence_publisher
+        -core_presence_publisher
         +mark_seen(hardware_id)
         +mark_stale_devices_offline(offline_before)
         -_publish_presence(device, occurred_at)
@@ -175,17 +171,18 @@ namespace application {
         -_run()
     }
 
-    class KafkaPresencePublisher {
-        -kafka_client
-        -producer
+    class CorePresenceHttpPublisher {
+        -base_url
+        -token
+        -timeout
+        -_opener
         +publish_device_presence_changed(payload)
-        +close()
     }
 }
 
 %% Relationships strictly inside Application Layer
 DevicePresenceMonitor --> DevicePresenceApplicationService : uses
-DevicePresenceApplicationService --> KafkaPresencePublisher : uses
+DevicePresenceApplicationService --> CorePresenceHttpPublisher : uses
 ```
 
 ---
@@ -259,10 +256,6 @@ namespace infrastructure {
         +last_seen_at
     }
 
-    class IamKafkaTopics {
-        +DEVICE_PRESENCE_CHANGED
-        +all()
-    }
 }
 
 %% Relationships strictly inside Infrastructure Layer

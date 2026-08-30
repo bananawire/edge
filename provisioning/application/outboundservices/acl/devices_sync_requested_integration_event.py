@@ -1,6 +1,6 @@
 """DevicesSyncRequestedIntegrationEvent — outbound ACL DTO for sync requests.
 
-Published by the Provisioning bounded context to Kafka topic
+Published by the Provisioning bounded context to HTTP topic
 `clair.provisioning.devices.sync.requested` for consumption by clair-core.
 """
 

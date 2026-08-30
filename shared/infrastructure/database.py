@@ -16,7 +16,7 @@ def _migrate_remove_device_secret():
 
     Renamed to api_key; this migration cleans up the old column.
     If the database engine does not support DROP COLUMN, the entire
-    table is dropped and recreated (data will be re-synced from Kafka).
+    table is dropped and recreated (data will be re-synced from HTTP).
     """
     from peewee import OperationalError
 
@@ -36,7 +36,7 @@ def _migrate_remove_device_secret():
         db.execute_sql("ALTER TABLE devices DROP COLUMN device_secret")
     except OperationalError:
         # SQLite < 3.35.0 does not support DROP COLUMN.
-        # Drop the whole table; data will be re-synced from Kafka.
+        # Drop the whole table; data will be re-synced from HTTP.
         db.execute_sql("DROP TABLE IF EXISTS devices")
 
 
@@ -73,18 +73,18 @@ def _migrate_telemetry_schema():
         db.execute_sql("DROP TABLE IF EXISTS device_telemetry")
 
 
-def _migrate_outbox_schema():
-    """Recreate device_outbox if it still stores duplicated JSON payloads."""
+def _migrate_device_cache_schema():
+    """Add roster columns without dropping data from existing edge databases."""
     cursor = db.execute_sql(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='device_outbox'"
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='devices'"
     )
     if not cursor.fetchone():
         return
-
-    col_cursor = db.execute_sql("PRAGMA table_info(device_outbox)")
-    columns = {row[1] for row in col_cursor.fetchall()}
-    if "payload" in columns or "api_key" in columns or "device_id" in columns:
-        db.execute_sql("DROP TABLE IF EXISTS device_outbox")
+    columns = {row[1] for row in db.execute_sql("PRAGMA table_info(devices)").fetchall()}
+    if "deleted" not in columns:
+        db.execute_sql("ALTER TABLE devices ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0")
+    if "updated_at" not in columns:
+        db.execute_sql("ALTER TABLE devices ADD COLUMN updated_at DATETIME")
 
 
 def init_db():
@@ -93,24 +93,28 @@ def init_db():
     Uses deferred imports to avoid circular dependencies between
     bounded context modules.
     """
-    db.connect()
+    db.connect(reuse_if_open=True)
     try:
         # Deferred imports to avoid circular dependencies
         from iam.infrastructure.models import DeviceModel
         from device.infrastructure.models import DeviceCommandModel, DeviceTelemetryModel
         from device.infrastructure.outbox.outbox_record_model import OutboxRecordModel
+        from device.infrastructure.outbox.outbox_payload_snapshot_model import OutboxPayloadSnapshotModel
         from alerting.infrastructure.models import AlertIncidentEventModel
+        from shared.infrastructure.models import SyncWatermarkModel
 
         _migrate_remove_device_secret()
+        _migrate_device_cache_schema()
         _migrate_telemetry_schema()
-        _migrate_outbox_schema()
         db.create_tables(
             [
                 DeviceModel,
                 DeviceTelemetryModel,
                 DeviceCommandModel,
                 OutboxRecordModel,
+                OutboxPayloadSnapshotModel,
                 AlertIncidentEventModel,
+                SyncWatermarkModel,
             ],
             safe=True,
         )

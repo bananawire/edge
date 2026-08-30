@@ -27,7 +27,7 @@ class OutboxEntry:
     def __init__(
         self,
         aggregate_type: str,
-        aggregate_id: int,
+        aggregate_id: int | str,
         event_type: str,
         status: str = "pending",
         retry_count: int = 0,
@@ -36,6 +36,7 @@ class OutboxEntry:
         id: Optional[int] = None,
         sent_at: Optional[datetime] = None,
         error_message: Optional[str] = None,
+        payload: Optional[str] = None,
     ):
         if not aggregate_type:
             raise ValueError("aggregate_type is required")
@@ -56,3 +57,5 @@ class OutboxEntry:
         self.created_at = created_at or datetime.now(timezone.utc)
         self.sent_at = sent_at
         self.error_message = error_message
+        # Immutable serialized integration-event snapshot captured at enqueue time.
+        self.payload = payload

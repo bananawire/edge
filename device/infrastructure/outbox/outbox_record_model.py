@@ -22,7 +22,9 @@ class OutboxRecordModel(Model):
 
     id = AutoField()
     aggregate_type = CharField(index=True)
-    aggregate_id = IntegerField(index=True)
+    # Telemetry uses integer IDs; command ACKs use UUID/string IDs.
+    # SQLite's affinity keeps existing telemetry rows readable during rollout.
+    aggregate_id = TextField(index=True)
     event_type = CharField(index=True)
     status = CharField(default="pending")  # pending | sent | dead_letter
     retry_count = IntegerField(default=0)
@@ -30,6 +32,8 @@ class OutboxRecordModel(Model):
     created_at = DateTimeField(default=datetime.now(timezone.utc))
     sent_at = DateTimeField(null=True)
     error_message = TextField(null=True)
+    # Serialized immutable integration-event payload (captured by the application service).
+    payload = TextField(null=True)
 
     class Meta:
         database = db

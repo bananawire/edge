@@ -1,6 +1,6 @@
 """DeviceCommandIssuedIntegrationEvent — inbound ACL DTO for pending commands.
 
-Consumed by the Device bounded context from Kafka topic
+Consumed by the Device bounded context from HTTP topic
 `clair.device.commands.pending` published by clair-core.
 """
 

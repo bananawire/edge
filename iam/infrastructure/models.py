@@ -3,7 +3,7 @@
 Maps the local clair-core device cache to the SQLite 'devices' table.
 """
 
-from peewee import CharField, DateTimeField, Model
+from peewee import BooleanField, CharField, DateTimeField, Model
 
 from shared.infrastructure.database import db
 
@@ -26,6 +26,9 @@ class DeviceModel(Model):
     status = CharField()
     created_at = DateTimeField()
     last_seen_at = DateTimeField(null=True)
+    # Tombstones remain locally so the roster can be replayed safely.
+    deleted = BooleanField(default=False)
+    updated_at = DateTimeField(null=True)
 
     class Meta:
         database = db

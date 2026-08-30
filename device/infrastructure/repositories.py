@@ -6,7 +6,7 @@ mapping between Peewee models and domain entities.
 
 from typing import Optional
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from device.domain.entities import (
     DeviceCommand,
@@ -16,6 +16,7 @@ from device.domain.entities import (
 )
 from device.domain.valueobjects import AirQuality, Connectivity, Location, ParticulateMatter
 from device.infrastructure.models import DeviceCommandModel, DeviceTelemetryModel
+from shared.infrastructure.database import db
 
 
 class DeviceTelemetryRepository:
@@ -136,6 +137,11 @@ class DeviceTelemetryRepository:
 class DeviceCommandRepository:
     """Repository for edge-local DeviceCommand aggregate persistence."""
 
+    # A delivered command is leased to the embedded device. If the HTTP
+    # response is lost, the lease eventually expires and the command is
+    # delivered again; ACK remains the only terminal transition.
+    DELIVERY_LEASE_SECONDS = 300
+
     def save(self, command: DeviceCommand) -> DeviceCommand:
         """Insert or update a device command and return the persisted entity."""
         DeviceCommandModel.insert(
@@ -147,7 +153,6 @@ class DeviceCommandRepository:
             payload=command.payload,
             received_at=command.received_at,
             delivered_at=command.delivered_at,
-            acknowledged_at=command.acknowledged_at,
             failure_reason=command.failure_reason,
         ).on_conflict(
             conflict_target=[DeviceCommandModel.command_id],
@@ -155,7 +160,6 @@ class DeviceCommandRepository:
                 DeviceCommandModel.status: command.status.value,
                 DeviceCommandModel.payload: command.payload,
                 DeviceCommandModel.delivered_at: command.delivered_at,
-                DeviceCommandModel.acknowledged_at: command.acknowledged_at,
                 DeviceCommandModel.failure_reason: command.failure_reason,
             },
         ).execute()
@@ -170,27 +174,66 @@ class DeviceCommandRepository:
             return None
 
     def find_pending_for_hardware_id(self, hardware_id: str) -> list[DeviceCommand]:
-        """Find commands not yet acknowledged by the embedded device."""
+        """Find new commands and delivered commands whose lease expired."""
+        lease_expiry = datetime.now(timezone.utc) - timedelta(seconds=self.DELIVERY_LEASE_SECONDS)
         query = (
             DeviceCommandModel.select()
             .where(
                 (DeviceCommandModel.hardware_id == hardware_id)
-                & (DeviceCommandModel.status.in_([
-                    EdgeDeviceCommandStatus.RECEIVED.value,
-                    EdgeDeviceCommandStatus.DELIVERED_TO_EMBEDDED.value,
-                ]))
+                & (
+                    (DeviceCommandModel.status == EdgeDeviceCommandStatus.RECEIVED.value)
+                    | (
+                        (DeviceCommandModel.status == EdgeDeviceCommandStatus.DELIVERED_TO_EMBEDDED.value)
+                        & (
+                            DeviceCommandModel.delivered_at.is_null()
+                            | (DeviceCommandModel.delivered_at <= lease_expiry)
+                        )
+                    )
+                )
             )
             .order_by(DeviceCommandModel.received_at.asc())
         )
         return [self._model_to_entity(model) for model in query]
 
     def mark_commands_delivered(self, commands: list[DeviceCommand]) -> list[DeviceCommand]:
-        """Mark a batch of commands as delivered to the embedded device."""
+        """Conditionally mark commands delivered, preserving concurrent terminal ACKs.
+
+        Poll results are materialized before they are marked delivered.  The
+        conditional update prevents that stale entity from overwriting an ACK
+        which completed between those two operations.
+        """
         delivered_at = datetime.now(timezone.utc)
+        lease_expiry = delivered_at - timedelta(seconds=self.DELIVERY_LEASE_SECONDS)
         delivered = []
-        for command in commands:
-            command.mark_delivered_to_embedded(delivered_at)
-            delivered.append(self.save(command))
+        # Claim the complete poll batch in one transaction.  This preserves
+        # the conditional per-row claim while preventing a partial batch from
+        # being exposed if persistence fails midway through the loop.
+        with db.atomic():
+            for command in commands:
+                claim = (
+                    (DeviceCommandModel.status == EdgeDeviceCommandStatus.RECEIVED.value)
+                    | (
+                        (DeviceCommandModel.status == EdgeDeviceCommandStatus.DELIVERED_TO_EMBEDDED.value)
+                        & (
+                            DeviceCommandModel.delivered_at.is_null()
+                            | (DeviceCommandModel.delivered_at <= lease_expiry)
+                        )
+                    )
+                )
+                claimed = (
+                    DeviceCommandModel.update(
+                        status=EdgeDeviceCommandStatus.DELIVERED_TO_EMBEDDED.value,
+                        delivered_at=delivered_at,
+                    )
+                    .where((DeviceCommandModel.command_id == command.command_id) & claim)
+                    .execute()
+                )
+                # Return the claimed snapshot, never reread the row: an ACK can
+                # legitimately win immediately after the claim and must not turn
+                # this response into a terminal command response.
+                if claimed == 1:
+                    command.mark_delivered_to_embedded(delivered_at)
+                    delivered.append(command)
         return delivered
 
     def _model_to_entity(self, model: DeviceCommandModel) -> DeviceCommand:
@@ -204,6 +247,5 @@ class DeviceCommandRepository:
             payload=model.payload,
             received_at=model.received_at,
             delivered_at=model.delivered_at,
-            acknowledged_at=model.acknowledged_at,
             failure_reason=model.failure_reason,
         )

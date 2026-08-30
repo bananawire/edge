@@ -8,6 +8,7 @@ from typing import Optional
 
 from iam.application.services import DevicePresenceApplicationService
 from shared.infrastructure.database import db
+from shared.infrastructure.environment import get_positive_interval
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +36,9 @@ class DevicePresenceMonitor:
         self._running = False
 
     def _run(self) -> None:
+        interval = get_positive_interval(
+            "EDGE_PRESENCE_POLL_INTERVAL_SECONDS", self.POLL_INTERVAL_SECONDS
+        )
         while self._running:
             try:
                 if db.is_closed():
@@ -50,4 +54,4 @@ class DevicePresenceMonitor:
             finally:
                 if not db.is_closed():
                     db.close()
-            time.sleep(self.POLL_INTERVAL_SECONDS)
+            time.sleep(interval)

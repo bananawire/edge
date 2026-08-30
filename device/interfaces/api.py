@@ -180,7 +180,7 @@ def acknowledge_embedded_device_command(command_id):
         {"status": "FAILED", "failureReason": "Embedded timeout"}
 
     Returns:
-        200: ACK persisted locally and published to Kafka for clair-core.
+        200: ACK persisted locally and queued in the asynchronous outbox for delivery to clair-core.
         400: Invalid body or unknown command.
         401: Missing or invalid device credentials.
     """

@@ -1,6 +1,6 @@
 """TelemetryRecordedIntegrationEvent — outbound ACL DTO for device telemetry.
 
-Published by the Device bounded context to Kafka topic
+Published by the Device bounded context to HTTP topic
 `clair.device.telemetry.recorded` for consumption by clair-core.
 """
 

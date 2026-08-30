@@ -33,6 +33,5 @@ def device_command_to_dict(command) -> dict:
         "payload": command.payload,
         "receivedAt": command.received_at.isoformat() if command.received_at else None,
         "deliveredAt": command.delivered_at.isoformat() if command.delivered_at else None,
-        "acknowledgedAt": command.acknowledged_at.isoformat() if command.acknowledged_at else None,
         "failureReason": command.failure_reason,
     }

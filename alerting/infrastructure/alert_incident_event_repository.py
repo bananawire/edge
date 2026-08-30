@@ -36,6 +36,42 @@ class AlertIncidentEventRepository:
         )
 
     @staticmethod
+    def update_from_integration_payload(
+        event: AlertIncidentEventModel, payload: dict, received_at: datetime
+    ) -> AlertIncidentEventModel:
+        """Apply a lifecycle transition and make it pending for embedded again."""
+
+        event.device_id = str(payload["device_id"])
+        event.space_id = str(payload["space_id"]) if payload.get("space_id") else None
+        event.metric = str(payload.get("metric"))
+        event.status = str(payload.get("status"))
+        event.message = payload.get("message")
+        event.threshold_value = (
+            str(payload["threshold_value"])
+            if payload.get("threshold_value") is not None
+            else None
+        )
+        event.actual_value = (
+            str(payload["actual_value"])
+            if payload.get("actual_value") is not None
+            else None
+        )
+        event.occurred_at = payload["occurred_at"]
+        event.resolved_at = payload.get("resolved_at")
+        event.received_at = received_at
+        event.delivered_at = None
+        event.acknowledged_at = None
+        event.save()
+        return event
+
+    @staticmethod
+    def find_by_alert_id(alert_id: str, hardware_id: str):
+        return AlertIncidentEventModel.get_or_none(
+            (AlertIncidentEventModel.alert_id == str(alert_id))
+            & (AlertIncidentEventModel.hardware_id == hardware_id)
+        )
+
+    @staticmethod
     def find_pending_for_hardware_id(hardware_id: str, limit: int = 50) -> list[AlertIncidentEventModel]:
         return list(
             AlertIncidentEventModel.select()

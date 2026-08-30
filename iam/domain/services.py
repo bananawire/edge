@@ -21,4 +21,4 @@ class AuthService:
         Returns:
             True if device is not None and status is not DECOMMISSIONED.
         """
-        return device is not None and device.status != "DECOMMISSIONED"
+        return device is not None and not getattr(device, "deleted", False) and device.status != "DECOMMISSIONED"

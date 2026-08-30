@@ -108,7 +108,6 @@ class DeviceCommand:
         payload: Optional[str],
         received_at: datetime,
         delivered_at: Optional[datetime] = None,
-        acknowledged_at: Optional[datetime] = None,
         failure_reason: Optional[str] = None,
     ):
         if not command_id:
@@ -132,19 +131,16 @@ class DeviceCommand:
         self.payload = payload
         self.received_at = received_at
         self.delivered_at = delivered_at
-        self.acknowledged_at = acknowledged_at
         self.failure_reason = failure_reason
 
     def mark_delivered_to_embedded(self, delivered_at: datetime) -> None:
         self.status = EdgeDeviceCommandStatus.DELIVERED_TO_EMBEDDED
         self.delivered_at = delivered_at
 
-    def mark_executed(self, acknowledged_at: datetime) -> None:
+    def mark_executed(self) -> None:
         self.status = EdgeDeviceCommandStatus.EXECUTED
-        self.acknowledged_at = acknowledged_at
         self.failure_reason = None
 
-    def mark_failed(self, acknowledged_at: datetime, failure_reason: Optional[str]) -> None:
+    def mark_failed(self, failure_reason: Optional[str]) -> None:
         self.status = EdgeDeviceCommandStatus.FAILED
-        self.acknowledged_at = acknowledged_at
         self.failure_reason = failure_reason

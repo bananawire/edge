@@ -34,6 +34,18 @@ class AlertIncidentEventApplicationService:
         normalized = self._normalize_payload(payload)
 
         with db.atomic():
+            existing = self._repository.find_by_alert_id(
+                normalized["alert_id"], normalized["hardware_id"]
+            )
+            if existing is not None:
+                if existing.status == normalized["status"]:
+                    return IngestAlertIncidentEventResult(stored=False, event_id=existing.id)
+                model = self._repository.update_from_integration_payload(
+                    existing,
+                    normalized,
+                    received_at=datetime.now(timezone.utc),
+                )
+                return IngestAlertIncidentEventResult(stored=True, event_id=model.id)
             model = self._repository.create_from_integration_payload(
                 normalized,
                 received_at=datetime.now(timezone.utc),
@@ -66,6 +78,10 @@ class AlertIncidentEventApplicationService:
         resolved_at = payload.get("resolved_at") or payload.get("resolvedAt")
         if not occurred_at:
             raise ValueError("Missing occurred_at")
+        alert_id = payload.get("alert_id") or payload.get("alertId")
+        device_id = payload.get("device_id") or payload.get("deviceId")
+        if not alert_id or not device_id:
+            raise ValueError("Missing alert_id or device_id")
 
         return {
             "alert_id": payload.get("alert_id") or payload.get("alertId"),

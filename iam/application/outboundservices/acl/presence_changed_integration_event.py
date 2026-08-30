@@ -1,6 +1,6 @@
 """DevicePresenceChangedIntegrationEvent — outbound ACL DTO for presence transitions.
 
-Published by the IAM bounded context to Kafka topic
+Published by the IAM bounded context to HTTP topic
 `clair.device.presence.changed` for consumption by clair-core.
 """
 

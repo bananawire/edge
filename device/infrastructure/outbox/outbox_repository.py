@@ -7,8 +7,12 @@ mapping between Peewee models and domain entities.
 from datetime import datetime, timezone
 from typing import List
 
+from peewee import JOIN
+
 from device.domain.outbox_entry import OutboxEntry
 from device.infrastructure.outbox.outbox_record_model import OutboxRecordModel
+from device.infrastructure.outbox.outbox_payload_snapshot_model import OutboxPayloadSnapshotModel
+from shared.infrastructure.database import db
 
 
 class OutboxRepository:
@@ -23,15 +27,28 @@ class OutboxRepository:
         Returns:
             A new OutboxEntry domain entity with the database-assigned ID.
         """
-        model = OutboxRecordModel.create(
-            aggregate_type=entry.aggregate_type,
-            aggregate_id=entry.aggregate_id,
-            event_type=entry.event_type,
-            status=entry.status,
-            retry_count=entry.retry_count,
-            next_retry_at=entry.next_retry_at,
-            created_at=entry.created_at,
-        )
+        values = {
+            "aggregate_type": entry.aggregate_type,
+            "aggregate_id": str(entry.aggregate_id),
+            "event_type": entry.event_type,
+            "status": entry.status,
+            "retry_count": entry.retry_count,
+            "next_retry_at": entry.next_retry_at,
+            "created_at": entry.created_at,
+        }
+        # Keep the record and its immutable snapshot in one transaction. A
+        # stale snapshot can exist when SQLite reuses an outbox id after a
+        # crash/interrupted cleanup; remove it before inserting the new one.
+        with db.atomic():
+            model = OutboxRecordModel.create(**values)
+            OutboxPayloadSnapshotModel.delete().where(
+                OutboxPayloadSnapshotModel.outbox_id == model.id
+            ).execute()
+            if entry.payload is not None:
+                OutboxPayloadSnapshotModel.create(
+                    outbox_id=model.id,
+                    payload=entry.payload,
+                )
         return self._model_to_entity(model)
 
     def find_pending(self, limit: int = 10) -> List[OutboxEntry]:
@@ -45,7 +62,7 @@ class OutboxRepository:
         """
         now = datetime.now(timezone.utc)
         query = (
-            OutboxRecordModel.select()
+            self._select_for_schema()
             .where(
                 (OutboxRecordModel.status == "pending")
                 & (OutboxRecordModel.next_retry_at <= now)
@@ -90,14 +107,43 @@ class OutboxRepository:
         Returns:
             Number of deleted rows.
         """
-        return (
-            OutboxRecordModel.delete()
-            .where(
+        sent_ids = [
+            row.id
+            for row in OutboxRecordModel.select(OutboxRecordModel.id).where(
                 (OutboxRecordModel.status == "sent")
                 & (OutboxRecordModel.sent_at <= before)
             )
-            .execute()
-        )
+        ]
+        with db.atomic():
+            # Delete children first so cleanup is safe even when deployments
+            # later add a foreign key to the snapshot table.
+            if sent_ids:
+                OutboxPayloadSnapshotModel.delete().where(
+                    OutboxPayloadSnapshotModel.outbox_id << sent_ids
+                ).execute()
+            # Also remove leftovers from an interrupted/older cleanup. Use a
+            # left join rather than NOT IN: nullable values in a NOT IN
+            # subquery can make the predicate match no rows at all.
+            orphan_ids = (
+                OutboxPayloadSnapshotModel
+                .select(OutboxPayloadSnapshotModel.id)
+                .join(
+                    OutboxRecordModel,
+                    JOIN.LEFT_OUTER,
+                    on=(OutboxPayloadSnapshotModel.outbox_id == OutboxRecordModel.id),
+                )
+                .where(OutboxRecordModel.id.is_null())
+            )
+            OutboxPayloadSnapshotModel.delete().where(
+                OutboxPayloadSnapshotModel.id << orphan_ids
+            ).execute()
+            if not sent_ids:
+                return 0
+            return (
+                OutboxRecordModel.delete()
+                .where(OutboxRecordModel.id << sent_ids)
+                .execute()
+            )
 
     def _model_to_entity(self, model: OutboxRecordModel) -> OutboxEntry:
         """Convert a Peewee model instance to an OutboxEntry domain entity."""
@@ -112,4 +158,30 @@ class OutboxRepository:
             created_at=model.created_at,
             sent_at=model.sent_at,
             error_message=model.error_message,
+            payload=self._snapshot_for(model),
         )
+
+    @staticmethod
+    def _snapshot_for(model: OutboxRecordModel) -> str | None:
+        """Read the immutable snapshot linked to this exact outbox id."""
+        snapshot = OutboxPayloadSnapshotModel.get_or_none(
+            OutboxPayloadSnapshotModel.outbox_id == model.id
+        )
+        if snapshot is not None:
+            return snapshot.payload
+        # Rows written by an earlier rollout may already have the optional
+        # column.  Reading it is only a backwards-compatibility fallback;
+        # new writes always use the auxiliary model above.
+        return getattr(model, "payload", None)
+
+    @staticmethod
+    def _has_payload_column() -> bool:
+        """Report schema capability through Peewee, without hand-written SQL."""
+        return any(column.name == "payload" for column in db.get_columns("device_outbox"))
+
+    def _select_for_schema(self):
+        fields = [
+            field for name, field in OutboxRecordModel._meta.fields.items()
+            if name != "payload" or self._has_payload_column()
+        ]
+        return OutboxRecordModel.select(*fields)

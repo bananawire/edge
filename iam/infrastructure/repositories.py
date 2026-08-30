@@ -40,6 +40,7 @@ class DeviceRepository:
                 status=model.status,
                 created_at=model.created_at,
                 last_seen_at=model.last_seen_at,
+                deleted=model.deleted,
             )
         except DeviceModel.DoesNotExist:
             return None
@@ -102,6 +103,7 @@ class DeviceRepository:
                 status=model.status,
                 created_at=model.created_at,
                 last_seen_at=model.last_seen_at,
+                deleted=model.deleted,
             )
         except DeviceModel.DoesNotExist:
             return None
@@ -117,6 +119,7 @@ class DeviceRepository:
                 status=model.status,
                 created_at=model.created_at,
                 last_seen_at=model.last_seen_at,
+                deleted=model.deleted,
             )
         except DeviceModel.DoesNotExist:
             return None

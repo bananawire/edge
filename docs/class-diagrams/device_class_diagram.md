@@ -45,6 +45,19 @@ namespace application {
         +handle(query)
     }
 
+    class DeviceCommandPoller {
+        -client
+        -service
+        -_running
+        -_thread
+        -_trigger
+        +start()
+        +stop()
+        +trigger()
+        +poll_once()
+        -_run()
+    }
+
     class TelemetryOutboxProcessor {
         -outbox_repository
         -telemetry_repository
@@ -105,11 +118,10 @@ namespace domain {
         +payload
         +received_at
         +delivered_at
-        +acknowledged_at
         +failure_reason
         +mark_delivered_to_embedded(delivered_at)
-        +mark_executed(acknowledged_at)
-        +mark_failed(acknowledged_at, failure_reason)
+        +mark_executed()
+        +mark_failed(failure_reason)
     }
 
     class OutboxEntry {
@@ -239,7 +251,6 @@ namespace infrastructure {
         +payload
         +received_at
         +delivered_at
-        +acknowledged_at
         +failure_reason
     }
 
@@ -257,6 +268,22 @@ namespace infrastructure {
     }
 
     class ExternalCoreService {
+        -_facade
+        +publish_telemetry_recorded(payload)
+        +publish_command_acknowledged(payload)
+    }
+
+    class CoreContextFacade {
+        <<abstract>>
+        +publish_telemetry_recorded(payload)
+        +publish_command_acknowledged(payload)
+    }
+
+    class HttpCoreContextFacadeImpl {
+        -base_url
+        -token
+        -timeout
+        -_opener
         +publish_telemetry_recorded(payload)
         +publish_command_acknowledged(payload)
     }
@@ -285,9 +312,13 @@ GetDeviceConnectionStatusQueryHandler --> GetDeviceConnectionStatusQuery : recei
 GetDeviceConnectionStatusQueryHandler --> DeviceTelemetryRepositoryInterface : uses
 GetDeviceConnectionStatusQueryHandler --> DeviceConnectionStatus : returns
 
+DeviceCommandPoller --> DeviceCommandApplicationService : uses
+DeviceCommandPoller --> CoreHttpClient : uses
 TelemetryOutboxProcessor --> OutboxRepositoryInterface : uses
 TelemetryOutboxProcessor --> DeviceTelemetryRepositoryInterface : uses
 TelemetryOutboxProcessor --> ExternalCoreService : uses
+ExternalCoreService --> CoreContextFacade : uses
+HttpCoreContextFacadeImpl ..|> CoreContextFacade : implements
 
 DeviceTelemetryService --> CreateFullTelemetryRecordCommand : receives
 DeviceTelemetryService --> DeviceTelemetry : creates
@@ -365,6 +396,19 @@ namespace application {
         +handle(query)
     }
 
+    class DeviceCommandPoller {
+        -client
+        -service
+        -_running
+        -_thread
+        -_trigger
+        +start()
+        +stop()
+        +trigger()
+        +poll_once()
+        -_run()
+    }
+
     class TelemetryOutboxProcessor {
         -outbox_repository
         -telemetry_repository
@@ -440,11 +484,10 @@ namespace domain {
         +payload
         +received_at
         +delivered_at
-        +acknowledged_at
         +failure_reason
         +mark_delivered_to_embedded(delivered_at)
-        +mark_executed(acknowledged_at)
-        +mark_failed(acknowledged_at, failure_reason)
+        +mark_executed()
+        +mark_failed(failure_reason)
     }
 
     class OutboxEntry {
@@ -596,7 +639,6 @@ namespace infrastructure {
         +payload
         +received_at
         +delivered_at
-        +acknowledged_at
         +failure_reason
     }
 
@@ -614,6 +656,22 @@ namespace infrastructure {
     }
 
     class ExternalCoreService {
+        -_facade
+        +publish_telemetry_recorded(payload)
+        +publish_command_acknowledged(payload)
+    }
+
+    class CoreContextFacade {
+        <<abstract>>
+        +publish_telemetry_recorded(payload)
+        +publish_command_acknowledged(payload)
+    }
+
+    class HttpCoreContextFacadeImpl {
+        -base_url
+        -token
+        -timeout
+        -_opener
         +publish_telemetry_recorded(payload)
         +publish_command_acknowledged(payload)
     }

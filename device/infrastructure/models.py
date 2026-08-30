@@ -70,7 +70,6 @@ class DeviceCommandModel(Model):
     payload = CharField(null=True)
     received_at = DateTimeField()
     delivered_at = DateTimeField(null=True)
-    acknowledged_at = DateTimeField(null=True)
     failure_reason = CharField(null=True)
 
     class Meta:

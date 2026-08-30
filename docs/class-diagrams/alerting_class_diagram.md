@@ -31,13 +31,17 @@ namespace application {
         -_to_dict(model)
     }
 
-    class KafkaAlertIncidentConsumer {
-        -alerting_service
-        -consumer
+    class AlertIncidentPoller {
+        -client
+        -service
+        -_running
+        -_thread
+        -_trigger
         +start()
         +stop()
+        +trigger()
+        +poll_once()
         -_run()
-        -_handle_message(payload)
     }
 
     class IngestAlertIncidentEventResult {
@@ -82,17 +86,21 @@ namespace infrastructure {
         +acknowledged_at
     }
 
-    class AlertingKafkaTopics {
-        +ALERT_INCIDENT_CHANGED
-        +all()
+    class CoreHttpClient {
+        -base_url
+        -token
+        -timeout
+        -opener
+        +get(path, params)
+        +post(path, body, accept_conflict)
     }
 }
 
 %% Relationships
 AlertingApi --> AlertIncidentEventApplicationService : uses
 
-KafkaAlertIncidentConsumer --> AlertIncidentEventApplicationService : uses
-KafkaAlertIncidentConsumer --> AlertingKafkaTopics : uses
+AlertIncidentPoller --> AlertIncidentEventApplicationService : uses
+AlertIncidentPoller --> CoreHttpClient : uses
 
 AlertIncidentEventApplicationService --> IngestAlertIncidentEventResult : returns
 AlertIncidentEventApplicationService --> AlertIncidentEventRepositoryInterface : uses
@@ -140,13 +148,17 @@ namespace application {
         -_to_dict(model)
     }
 
-    class KafkaAlertIncidentConsumer {
-        -alerting_service
-        -consumer
+    class AlertIncidentPoller {
+        -client
+        -service
+        -_running
+        -_thread
+        -_trigger
         +start()
         +stop()
+        +trigger()
+        +poll_once()
         -_run()
-        -_handle_message(payload)
     }
 
     class IngestAlertIncidentEventResult {
@@ -156,7 +168,7 @@ namespace application {
 }
 
 %% Relationships strictly inside Application Layer
-KafkaAlertIncidentConsumer --> AlertIncidentEventApplicationService : uses
+AlertIncidentPoller --> AlertIncidentEventApplicationService : uses
 AlertIncidentEventApplicationService --> IngestAlertIncidentEventResult : returns
 ```
 
@@ -215,9 +227,13 @@ namespace infrastructure {
         +acknowledged_at
     }
 
-    class AlertingKafkaTopics {
-        +ALERT_INCIDENT_CHANGED
-        +all()
+    class CoreHttpClient {
+        -base_url
+        -token
+        -timeout
+        -opener
+        +get(path, params)
+        +post(path, body, accept_conflict)
     }
 }
 
