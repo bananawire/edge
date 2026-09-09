@@ -9,8 +9,8 @@ Servicio edge para la ingesta de telemetría ambiental (CO2 y PM2.5) desde dispo
 | **Python 3.13** | Lenguaje principal |
 | **uv** | Gestor de paquetes y entornos virtuales |
 | **Flask** | Framework web para los endpoints REST |
-| **Peewee** | ORM ligero para mapear entidades a SQLite |
-| **SQLite** | Base de datos embebida local |
+| **Peewee** | ORM ligero para mapear entidades a libSQL |
+| **Turso (libSQL)** | Base de datos libSQL gestionada y remota |
 
 ## Arquitectura
 
@@ -48,7 +48,8 @@ edge-service/
 │   └── interfaces/                # Recursos HTTP del bounded context
 └── shared/                        # Infraestructura compartida
     └── infrastructure/
-        └── database.py            # SqliteDatabase(EDGE_DATABASE_PATH || 'clair_edge.db') + init_db()
+        ├── database.py            # TursoDatabase(EDGE_TURSO_URL || EDGE_DATABASE_PATH) + init_db()
+        └── turso_database.py      # peewee.Database subclass backed by libsql
 ```
 
 ## Requisitos Previos
@@ -139,7 +140,9 @@ Variables relevantes:
 
 | Variable | Default | Descripción |
 |---|---|---|
-| `EDGE_DATABASE_PATH` | `clair_edge.db` | Ruta del SQLite local del edge |
+| `EDGE_TURSO_URL` | (vacío) | URL `libsql://...` de la base Turso remota. Si está definida, el edge escribe contra Turso y `EDGE_DATABASE_PATH` se ignora. |
+| `EDGE_TURSO_TOKEN` | (vacío) | JWT emitido por `turso db tokens create` para autenticar el cliente libsql contra Turso. Requerido en producción. |
+| `EDGE_DATABASE_PATH` | `clair_edge.db` | Fallback local: ruta del archivo libSQL usada solo cuando `EDGE_TURSO_URL` está vacío (tests unitarios, desarrollo offline). |
 | `CLAIR_CORE_BASE_URL` | `https://core.example.internal` | URL base de clair-core (HTTPS fuera de localhost) |
 | `EDGE_TO_CORE_TOKEN` | (requerido) | Token para llamadas edge → core |
 | `EDGE_TOKEN` | (requerido) | Token para notificaciones core → edge |
@@ -182,7 +185,40 @@ snapshot en la misma transacción que el ACK o la telemetría.
 ## Inspeccionar la Base de Datos
 
 ```bash
+# Producción: Turso (libSQL remoto)
+turso db shell <db-name> ".tables"
+turso db shell <db-name> "SELECT * FROM devices;"
+
+# Desarrollo local (cuando EDGE_TURSO_URL está vacío)
 sqlite3 clair_edge.db ".tables"
 sqlite3 clair_edge.db "SELECT * FROM devices;"
 sqlite3 clair_edge.db "SELECT * FROM device_telemetry;"
 ```
+
+## Configuración de Turso
+
+Turso provee una base libSQL gestionada con replicas y HTTP. Para apuntar el
+edge a Turso:
+
+1. Crear la base (una sola vez):
+   ```bash
+   turso db create clair-edge
+   ```
+2. Emitir un token JWT para el cliente:
+   ```bash
+   turso db tokens create clair-edge
+   ```
+3. Copiar la URL `libsql://...` que imprime `turso db show clair-edge` y el
+   token en `.env`:
+   ```ini
+   EDGE_TURSO_URL=libsql://clair-edge.turso.io
+   EDGE_TURSO_TOKEN=<token-generado>
+   ```
+4. Iniciar el edge. `init_db()` aplicará migraciones idempotentes y creará
+   las tablas contra Turso; no se genera ningún archivo local.
+
+> El esquema se mantiene igual contra Turso o contra el archivo local: el
+> cliente `libsql` es wire-compatible con SQLite, así que
+> `ALTER TABLE ... ADD COLUMN`, `BEGIN`/`COMMIT` y `PRAGMA table_info`
+> funcionan sin cambios. La serialización de escritura vive en el servidor
+> Turso, por lo que el edge ya no necesita `BEGIN IMMEDIATE`.

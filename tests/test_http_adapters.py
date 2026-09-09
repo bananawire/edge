@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 from urllib.error import HTTPError
 
-from peewee import IntegrityError, SqliteDatabase
+from peewee import IntegrityError
 
 from device.application.outboundservices.acl.http_core_context_facade import HttpCoreContextFacadeImpl
 from device.application.outbox_processor import TelemetryOutboxProcessor
@@ -80,31 +80,35 @@ class HttpAdapterTests(unittest.TestCase):
         self.assertEqual(snapshot_delete.where.return_value.execute.call_count, 2)
 
     def test_snapshot_rejects_null_id_and_cleanup_removes_orphan(self):
-        test_db = SqliteDatabase(":memory:")
-        models = [OutboxRecordModel, OutboxPayloadSnapshotModel]
-        with test_db.bind_ctx(models):
-            test_db.create_tables(models)
-            with self.assertRaises(IntegrityError):
-                OutboxPayloadSnapshotModel.create(outbox_id=None, payload="invalid")
+        # The autouse ``db`` fixture in ``tests/conftest.py`` provides a fresh
+        # in-memory TursoDatabase for this test and rebinds every Peewee
+        # model to it. We pick up the same instance through the module
+        # attribute so the cleanup call (which patches
+        # ``device.infrastructure.outbox.outbox_repository.db``) targets the
+        # same DB the rest of the test writes through.
+        from shared.infrastructure import database as db_module
+        test_db = db_module.db
 
-            sent = OutboxRecordModel.create(
-                aggregate_type="TELEMETRY", aggregate_id="7",
-                event_type="TELEMETRY_RECORDED", status="sent",
-                retry_count=0, next_retry_at=datetime.now(timezone.utc),
-                created_at=datetime.now(timezone.utc),
-                sent_at=datetime.now(timezone.utc),
+        with self.assertRaises(IntegrityError):
+            OutboxPayloadSnapshotModel.create(outbox_id=None, payload="invalid")
+
+        sent = OutboxRecordModel.create(
+            aggregate_type="TELEMETRY", aggregate_id="7",
+            event_type="TELEMETRY_RECORDED", status="sent",
+            retry_count=0, next_retry_at=datetime.now(timezone.utc),
+            created_at=datetime.now(timezone.utc),
+            sent_at=datetime.now(timezone.utc),
+        )
+        OutboxPayloadSnapshotModel.create(outbox_id=sent.id, payload="sent")
+        orphan = OutboxPayloadSnapshotModel.create(outbox_id=999, payload="orphan")
+
+        with patch("device.infrastructure.outbox.outbox_repository.db", test_db):
+            self.assertEqual(
+                OutboxRepository().delete_sent_older_than(datetime.now(timezone.utc)),
+                1,
             )
-            OutboxPayloadSnapshotModel.create(outbox_id=sent.id, payload="sent")
-            orphan = OutboxPayloadSnapshotModel.create(outbox_id=999, payload="orphan")
-
-            with patch("device.infrastructure.outbox.outbox_repository.db", test_db):
-                self.assertEqual(
-                    OutboxRepository().delete_sent_older_than(datetime.now(timezone.utc)),
-                    1,
-                )
-            self.assertIsNone(OutboxRecordModel.get_or_none(OutboxRecordModel.id == sent.id))
-            self.assertIsNone(OutboxPayloadSnapshotModel.get_or_none(OutboxPayloadSnapshotModel.id == orphan.id))
-            test_db.close()
+        self.assertIsNone(OutboxRecordModel.get_or_none(OutboxRecordModel.id == sent.id))
+        self.assertIsNone(OutboxPayloadSnapshotModel.get_or_none(OutboxPayloadSnapshotModel.id == orphan.id))
 
     def test_save_replaces_snapshot_when_sqlite_reuses_outbox_id(self):
         entry = OutboxEntry("COMMAND", "command-1", "COMMAND_ACKNOWLEDGED", payload='{"v":2}')
@@ -172,8 +176,17 @@ class HttpAdapterTests(unittest.TestCase):
         })()
         entries = []
         service.outbox_repository = type("Outbox", (), {"save": lambda self, entry: entries.append(entry)})()
-        first = service.acknowledge_embedded_command(AcknowledgeEmbeddedDeviceCommandCommand("h", "c", "EXECUTED", None))
-        second = service.acknowledge_embedded_command(AcknowledgeEmbeddedDeviceCommandCommand("h", "c", "FAILED", "late"))
+        # Stub the conditional UPDATE to simulate "we won the race". The
+        # application service mirrors the transition onto the in-memory
+        # entity after the UPDATE returns 1, so the duplicated ACK observes
+        # the terminal state without re-reading the DB.
+        update = MagicMock()
+        update.where.return_value = update
+        update.execute.return_value = 1
+        with patch("device.application.services.DeviceCommandModel.update", return_value=update), \
+             patch("device.application.services.db"):
+            first = service.acknowledge_embedded_command(AcknowledgeEmbeddedDeviceCommandCommand("h", "c", "EXECUTED", None))
+            second = service.acknowledge_embedded_command(AcknowledgeEmbeddedDeviceCommandCommand("h", "c", "FAILED", "late"))
         self.assertEqual(first.status, EdgeDeviceCommandStatus.EXECUTED)
         self.assertEqual(second.status, EdgeDeviceCommandStatus.EXECUTED)
         self.assertEqual(len(entries), 1)

@@ -23,6 +23,7 @@ from device.domain.outbox_entry import OutboxEntry
 from device.domain.services import DeviceTelemetryService
 from device.application.outboundservices.acl.external_core_service import ExternalCoreService
 from device.infrastructure.outbox.outbox_repository import OutboxRepository
+from device.infrastructure.models import DeviceCommandModel
 from device.infrastructure.repositories import DeviceCommandRepository, DeviceTelemetryRepository
 from iam.infrastructure.repositories import DeviceRepository
 from shared.infrastructure.database import db
@@ -178,29 +179,68 @@ class DeviceCommandApplicationService:
 
         Clair-core delivery is asynchronous and handled by the background outbox
         processor after this local transaction commits.
+
+        Turso/libSQL serializes writes server-side and the ``BEGIN IMMEDIATE``
+        SQLite modifier is not part of the remote protocol. We replace the
+        client-side write lock with a conditional UPDATE: only the row in
+        ``DELIVERED_TO_EMBEDDED`` state is promoted to a terminal status, so
+        concurrent ACK requests cannot both observe a non-terminal command and
+        double-enqueue an outbox event.
         """
-        # Keep the read and conditional terminal transition in one transaction.
-        # A repeated ACK returns the first terminal result and does not enqueue
-        # another event, preserving both idempotency and the original snapshot.
-        # IMMEDIATE obtains SQLite's write lock before the state check, so two
-        # concurrent ACK requests cannot both observe a non-terminal command.
-        with db.atomic("IMMEDIATE"):
-            device_command = self.command_repository.find_by_command_id(command.command_id)
-            if device_command is None or device_command.hardware_id != command.hardware_id:
+        new_status = (
+            EdgeDeviceCommandStatus.EXECUTED
+            if command.status == "EXECUTED"
+            else EdgeDeviceCommandStatus.FAILED
+        )
+
+        with db.atomic():
+            existing = self.command_repository.find_by_command_id(command.command_id)
+            if existing is None or existing.hardware_id != command.hardware_id:
                 raise ValueError("Device command not found")
-            if device_command.status in (
+            if existing.status in (
                 EdgeDeviceCommandStatus.EXECUTED,
                 EdgeDeviceCommandStatus.FAILED,
             ):
-                return device_command
-            if device_command.status != EdgeDeviceCommandStatus.DELIVERED_TO_EMBEDDED:
+                return existing
+            if existing.status != EdgeDeviceCommandStatus.DELIVERED_TO_EMBEDDED:
                 raise ValueError("Device command has not been delivered")
 
-            if command.status == "EXECUTED":
-                device_command.mark_executed()
+            failure_reason = (
+                None if new_status == EdgeDeviceCommandStatus.EXECUTED else command.failure_reason
+            )
+            updated = (
+                DeviceCommandModel
+                .update(
+                    status=new_status.value,
+                    failure_reason=failure_reason,
+                )
+                .where(
+                    (DeviceCommandModel.command_id == command.command_id)
+                    & (DeviceCommandModel.hardware_id == command.hardware_id)
+                    & (DeviceCommandModel.status == EdgeDeviceCommandStatus.DELIVERED_TO_EMBEDDED.value)
+                )
+                .execute()
+            )
+            if updated == 0:
+                # Another worker transitioned the command after our snapshot
+                # read; honor the terminal state it produced.
+                terminal = self.command_repository.find_by_command_id(command.command_id)
+                if terminal is not None and terminal.status in (
+                    EdgeDeviceCommandStatus.EXECUTED,
+                    EdgeDeviceCommandStatus.FAILED,
+                ):
+                    return terminal
+                raise ValueError("Device command state changed concurrently")
+
+            # Reflect the new state on the in-memory entity so subsequent
+            # in-process reads (e.g. a duplicated ACK landing moments later)
+            # see the terminal status without an extra round-trip. The DB
+            # row has already been updated by the conditional UPDATE above.
+            if new_status == EdgeDeviceCommandStatus.EXECUTED:
+                existing.mark_executed()
             else:
-                device_command.mark_failed(command.failure_reason)
-            saved = self.command_repository.save(device_command)
+                existing.mark_failed(failure_reason)
+            saved = existing
             payload = json.dumps({
                 "device_id": saved.device_id,
                 "hardware_id": saved.hardware_id,
