@@ -10,3 +10,4 @@ wheels/
 .venv
 clair_edge.db
 .env
+prod.env

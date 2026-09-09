@@ -1,29 +1,17 @@
 import unittest
-from datetime import datetime, timezone
 from unittest.mock import Mock
 
 from iam.application.services import AuthApplicationService
 from iam.infrastructure.models import DeviceModel
 from provisioning.application.services.device_provisioning_application_service import DeviceProvisioningApplicationService
-from provisioning.infrastructure.device_cache_repository import DeviceCacheRepository
-from shared.infrastructure.database import db
 
 from provisioning.application.device_roster_poller import DeviceRosterPoller
 
 
 class DeviceRosterPollerTests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        db.connect(reuse_if_open=True)
-        db.create_tables([DeviceModel], safe=True)
-
-    @classmethod
-    def tearDownClass(cls):
-        DeviceModel.delete().execute()
-        db.close()
-
-    def setUp(self):
-        DeviceModel.delete().execute()
+    # The autouse ``db`` fixture in ``tests/conftest.py`` provides a fresh
+    # in-memory TursoDatabase per test and creates every Peewee table on it,
+    # so no per-class/per-test DB setup is needed here.
 
     def test_failed_page_does_not_advance_watermark(self):
         client = Mock()

@@ -1,90 +1,75 @@
-"""SQLite database configuration and initialization.
+"""Turso (libSQL) database configuration and initialization.
 
-Provides the shared SqliteDatabase instance and init_db() function
+Provides the shared ``TursoDatabase`` instance and ``init_db()`` function
 that creates all tables across bounded contexts.
+
+In production the database is the remote Turso instance identified by
+``EDGE_TURSO_URL`` + ``EDGE_TURSO_TOKEN``. When ``EDGE_TURSO_URL`` is empty the
+same client falls back to the local libSQL file at ``EDGE_DATABASE_PATH`` so
+unit tests and offline development keep working without an internet
+connection.
 """
 
-from peewee import SqliteDatabase
+from shared.infrastructure.environment import (
+    get_edge_database_path,
+    get_edge_turso_token,
+    get_edge_turso_url,
+)
+from shared.infrastructure.turso_database import TursoDatabase
 
-from shared.infrastructure.environment import get_edge_database_path
+_turso_url = get_edge_turso_url()
+_turso_token = get_edge_turso_token()
 
-db = SqliteDatabase(get_edge_database_path())
-
-
-def _migrate_remove_device_secret():
-    """Remove the legacy device_secret column from the devices table.
-
-    Renamed to api_key; this migration cleans up the old column.
-    If the database engine does not support DROP COLUMN, the entire
-    table is dropped and recreated (data will be re-synced from HTTP).
-    """
-    from peewee import OperationalError
-
-    cursor = db.execute_sql(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='devices'"
-    )
-    if not cursor.fetchone():
-        return
-
-    col_cursor = db.execute_sql("PRAGMA table_info(devices)")
-    columns = {row[1] for row in col_cursor.fetchall()}
-
-    if "device_secret" not in columns:
-        return  # Already clean
-
-    try:
-        db.execute_sql("ALTER TABLE devices DROP COLUMN device_secret")
-    except OperationalError:
-        # SQLite < 3.35.0 does not support DROP COLUMN.
-        # Drop the whole table; data will be re-synced from HTTP.
-        db.execute_sql("DROP TABLE IF EXISTS devices")
-
-
-def _migrate_telemetry_schema():
-    """Recreate device_telemetry table if it still uses the legacy full schema.
-
-    The optimized payload no longer sends deviceHealth, deviceInfo, or detailed
-    connectivity fields. If the old columns are detected, the legacy table is
-    dropped so Peewee can create the clean new schema on startup.
-    Also recreates if new required columns (signal_strength, health_status) are missing.
-    """
-    cursor = db.execute_sql(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='device_telemetry'"
-    )
-    if not cursor.fetchone():
-        return
-
-    # Detect legacy column that does not exist in the optimized schema
-    col_cursor = db.execute_sql("PRAGMA table_info(device_telemetry)")
-    columns = {row[1] for row in col_cursor.fetchall()}
-    
-    # Drop if legacy columns exist
-    if "wifi_ssid" in columns or "free_heap" in columns or "chip_model" in columns:
-        db.execute_sql("DROP TABLE IF EXISTS device_telemetry")
-        return
-    
-    # Drop if removed columns still exist
-    if "air_quality_valid" in columns or "pm_valid" in columns:
-        db.execute_sql("DROP TABLE IF EXISTS device_telemetry")
-        return
-    
-    # Drop if new required columns are missing
-    if "signal_strength" not in columns or "health_status" not in columns:
-        db.execute_sql("DROP TABLE IF EXISTS device_telemetry")
+if _turso_url:
+    db = TursoDatabase(database=_turso_url, auth_token=_turso_token)
+else:
+    # Local-file fallback. The libsql client is SQLite-compatible, so the
+    # same schema/DDL code paths work against either target. We pass an empty
+    # auth_token explicitly so the libsql.connect call stays a keyword call.
+    db = TursoDatabase(database=get_edge_database_path(), auth_token="")
 
 
 def _migrate_device_cache_schema():
-    """Add roster columns without dropping data from existing edge databases."""
-    cursor = db.execute_sql(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='devices'"
-    )
-    if not cursor.fetchone():
-        return
-    columns = {row[1] for row in db.execute_sql("PRAGMA table_info(devices)").fetchall()}
-    if "deleted" not in columns:
-        db.execute_sql("ALTER TABLE devices ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0")
-    if "updated_at" not in columns:
+    """Add roster columns without dropping data from existing edge databases.
+
+    Uses Peewee's portable ``db.get_tables``/``db.get_columns`` introspection
+    rather than raw ``PRAGMA``/``sqlite_master`` SQL so the migration works
+    against both a local libSQL file and a remote Turso database.
+    """
+    if "devices" not in db.get_tables():
+        return  # Nothing to migrate; create_tables() will build the table.
+    existing = {c.name for c in db.get_columns("devices")}
+    if "deleted" not in existing:
+        db.execute_sql(
+            "ALTER TABLE devices ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0"
+        )
+    if "updated_at" not in existing:
         db.execute_sql("ALTER TABLE devices ADD COLUMN updated_at DATETIME")
+
+
+def _migrate_telemetry_schema():
+    """Recreate ``device_telemetry`` if its schema is stale.
+
+    The optimized payload no longer sends ``deviceHealth``/``deviceInfo``/
+    detailed connectivity fields. If legacy columns are detected, or the
+    required new columns are missing, we drop the table so Peewee can
+    recreate the clean schema on startup. ``db.drop_tables(safe=True)`` is
+    portable across the local libSQL file and remote Turso; the raw
+    ``DROP TABLE`` SQL is not used anywhere.
+    """
+    if "device_telemetry" not in db.get_tables():
+        return  # Nothing to migrate; create_tables() will build the table.
+    column_names = {c.name for c in db.get_columns("device_telemetry")}
+
+    has_legacy_columns = bool(
+        {"wifi_ssid", "free_heap", "chip_model", "air_quality_valid", "pm_valid"}
+        & column_names
+    )
+    missing_required = not {"signal_strength", "health_status"} <= column_names
+
+    if has_legacy_columns or missing_required:
+        from device.infrastructure.models import DeviceTelemetryModel
+        db.drop_tables([DeviceTelemetryModel], safe=True)
 
 
 def init_db():
@@ -103,7 +88,6 @@ def init_db():
         from alerting.infrastructure.models import AlertIncidentEventModel
         from shared.infrastructure.models import SyncWatermarkModel
 
-        _migrate_remove_device_secret()
         _migrate_device_cache_schema()
         _migrate_telemetry_schema()
         db.create_tables(

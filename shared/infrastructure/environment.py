@@ -16,7 +16,32 @@ def _optional(name: str, default: str) -> str:
 
 
 def get_edge_database_path() -> str:
+    """Return the local libSQL file path used as the production fallback.
+
+    Production deployments should set EDGE_TURSO_URL/EDGE_TURSO_TOKEN instead
+    and leave this empty. The path is honored only when no remote Turso
+    database is configured, keeping unit tests and offline local dev working
+    through the same libSQL client.
+    """
     return os.getenv("EDGE_DATABASE_PATH", "clair_edge.db").strip() or "clair_edge.db"
+
+
+def get_edge_turso_url() -> str:
+    """Return the remote libsql:// URL of the Turso database, or empty.
+
+    When non-empty the edge talks to Turso over HTTP. Empty means: fall back
+    to the local libSQL file (EDGEDATABASE_PATH).
+    """
+    return os.getenv("EDGE_TURSO_URL", "").strip()
+
+
+def get_edge_turso_token() -> str:
+    """Return the JWT used to authenticate against the remote Turso database.
+
+    Required when EDGE_TURSO_URL is set. Returned as an empty string otherwise
+    so unit tests can construct a TursoDatabase without supplying a token.
+    """
+    return os.getenv("EDGE_TURSO_TOKEN", "").strip()
 
 
 def get_positive_interval(name: str, default: float, minimum: float = 0.1) -> float:

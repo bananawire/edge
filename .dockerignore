@@ -1,0 +1,41 @@
+# Local virtualenv (rebuilt inside the builder stage)
+.venv
+venv/
+env/
+
+# Git history
+.git
+.gitignore
+
+# Python bytecode / caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local database files (production uses Turso, not local SQLite)
+*.db
+*.sqlite
+*.sqlite3
+
+# Secrets / local config
+.env
+.env.local
+.env.*.local
+
+# Tests (production image does not run them)
+tests/
+
+# Documentation (keep README.md — required by pyproject [project].readme for the build)
+docs/
+
+# Docker artefacts
+Dockerfile
+.dockerignore
+docker-compose*.yml
+
+# Nix / dev shell
+shell.nix
+*.lock.bak
