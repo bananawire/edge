@@ -1,38 +1,42 @@
-"""ParticulateMatter value object — represents PMS5003 sensor readings.
+"""ParticulateMatter value object — PMS5003 readings as decimals.
 
-Immutable value object containing PM1.0, PM2.5 and PM10 measurements.
+Values travel as decimals end to end (core stores double precision). A missing
+or non-finite reading is a validation error, never a silent zero.
 """
 
+import math
 from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
 class ParticulateMatter:
-    """PMS5003 particulate matter sensor readings.
+    """PM1.0, PM2.5 and PM10 concentrations in µg/m³."""
 
-    Attributes:
-        pm1_0: PM1.0 concentration in µg/m³
-        pm2_5: PM2.5 concentration in µg/m³
-        pm10: PM10 concentration in µg/m³
-    """
-    pm1_0: int
-    pm2_5: int
-    pm10: int
+    pm1_0: float
+    pm2_5: float
+    pm10: float
 
     def __post_init__(self):
-        """Validate particulate matter values."""
-        if self.pm1_0 < 0 or self.pm1_0 > 1000:
-            raise ValueError(f"PM1.0 must be between 0 and 1000 µg/m³, got {self.pm1_0}")
-        if self.pm2_5 < 0 or self.pm2_5 > 1000:
-            raise ValueError(f"PM2.5 must be between 0 and 1000 µg/m³, got {self.pm2_5}")
-        if self.pm10 < 0 or self.pm10 > 1000:
-            raise ValueError(f"PM10 must be between 0 and 1000 µg/m³, got {self.pm10}")
+        for name in ("pm1_0", "pm2_5", "pm10"):
+            value = getattr(self, name)
+            if not isinstance(value, (int, float)) or isinstance(value, bool) or not math.isfinite(value):
+                raise ValueError(f"{name} must be a finite number, got {value!r}")
+            if value < 0 or value > 1000:
+                raise ValueError(f"{name} must be between 0 and 1000 µg/m³, got {value}")
+            object.__setattr__(self, name, float(value))
 
     @classmethod
     def from_dict(cls, data: dict) -> "ParticulateMatter":
-        """Create ParticulateMatter from dictionary payload."""
-        return cls(
-            pm1_0=int(data.get("pm1_0", 0)),
-            pm2_5=int(data.get("pm2_5", 0)),
-            pm10=int(data.get("pm10", 0)),
-        )
+        """Create from a payload dict; every field is required."""
+        missing = [k for k in ("pm1_0", "pm2_5", "pm10") if data.get(k) is None]
+        if missing:
+            raise ValueError(f"Missing particulate matter field(s): {', '.join(missing)}")
+        return cls(pm1_0=_number(data["pm1_0"], "pm1_0"),
+                   pm2_5=_number(data["pm2_5"], "pm2_5"),
+                   pm10=_number(data["pm10"], "pm10"))
+
+
+def _number(value, name: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{name} must be a number, got {value!r}")
+    return float(value)

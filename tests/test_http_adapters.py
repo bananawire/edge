@@ -129,43 +129,51 @@ class HttpAdapterTests(unittest.TestCase):
     def test_telemetry_posts_batch_record(self):
         calls=[]
         def opener(request, timeout): calls.append(request); return Response(200, b'{"results":[{"status":"CREATED"}]}')
-        self.assertTrue(HttpCoreContextFacadeImpl("http://localhost:8080", "secret", opener=opener).publish_telemetry_recorded({"device_id":"d"}))
+        self.assertTrue(HttpCoreContextFacadeImpl("http://localhost:8080", "secret", opener=opener).publish_telemetry_recorded({"device_id":"d"}).delivered)
         self.assertEqual(json.loads(calls[0].data), {"records":[{"device_id":"d"}]})
 
     def test_telemetry_always_enqueues_immutable_snapshot(self):
         recorded_at = datetime(2024, 1, 2, tzinfo=timezone.utc)
         record = SimpleNamespace(
-            id=7, device_id="d", device_time="2024-01-02T00:00:00Z",
-            uptime_seconds=3,
-            air_quality=SimpleNamespace(co2=1, temperature=2, humidity=3),
-            particulate_matter=SimpleNamespace(pm1_0=4, pm2_5=5, pm10=6),
+            id=7, device_id="d", reading_id="40e67f87-2c0a-47ef-a3ed-7999e106cc9c",
+            device_time="00:00:00", uptime_seconds=3,
+            air_quality=SimpleNamespace(co2=1.0, temperature=2.0, humidity=3.0),
+            particulate_matter=SimpleNamespace(pm1_0=4.5, pm2_5=5.25, pm10=6.0),
             connectivity=SimpleNamespace(status="up", network="net", signal_strength=-1),
-            location=SimpleNamespace(country="US"), health_status="ok", status="valid",
-            recorded_at=recorded_at,
+            location=SimpleNamespace(country="US"), health_status=100, status="valid",
+            recorded_at=recorded_at, received_at=recorded_at, time_source="device",
         )
         service = DeviceTelemetryAppService()
         command = CreateFullTelemetryRecordCommand(
             hardware_id="hw-1",
-            device_time="2024-01-02T00:00:00Z",
+            device_time="00:00:00",
             uptime="00:00:03",
             air_quality={"co2": 1, "temperature": 2, "humidity": 3},
-            particulate_matter={"pm1_0": 4, "pm2_5": 5, "pm10": 6},
+            particulate_matter={"pm1_0": 4.5, "pm2_5": 5.25, "pm10": 6},
             connectivity={"status": "up", "network": "net", "signalStrength": -1},
             location={"country": "US"},
             health_status=100,
             status="valid",
+            reading_id=record.reading_id,
+            measured_at="2024-01-02T00:00:00Z",
         )
         service.device_repository = type("Devices", (), {"find_by_hardware_id": lambda *_: object()})()
         service.telemetry_service = type("Telemetry", (), {"create_record_from_command": lambda *_: record})()
-        service.telemetry_repository = type("TelemetryRepo", (), {"save": lambda *_: record})()
+        service.telemetry_repository = type("TelemetryRepo", (), {
+            "save": lambda *_: record,
+            "find_by_device_and_reading_id": lambda *_: None,
+        })()
         entries = []
         service.outbox_repository = type("Outbox", (), {"save": lambda _, entry: entries.append(entry)})()
         with patch("device.application.services.db.atomic"):
-            service.create_full_telemetry_record(command, raw_payload=None)
+            result = service.ingest(command)
+        self.assertFalse(result.duplicate)
         self.assertEqual(len(entries), 1)
         snapshot = json.loads(entries[0].payload)
-        self.assertEqual(snapshot["recorded_at"], recorded_at.isoformat())
+        self.assertEqual(snapshot["reading_id"], record.reading_id)
         self.assertEqual(snapshot["occurred_at"], recorded_at.isoformat())
+        self.assertEqual(snapshot["pm2_5"], 5.25)
+        self.assertEqual(snapshot["client_ref"], "7")
 
     def test_duplicate_ack_is_idempotent_and_keeps_snapshot(self):
         command = DeviceCommand("c", "d", "h", DeviceCommandType.STANDBY, EdgeDeviceCommandStatus.DELIVERED_TO_EMBEDDED, None, datetime.now(timezone.utc))
@@ -232,12 +240,12 @@ class HttpAdapterTests(unittest.TestCase):
     def test_command_ack_maps_core_contract(self):
         calls=[]
         def opener(request, timeout): calls.append(request); return Response(200)
-        self.assertTrue(HttpCoreContextFacadeImpl(opener=opener).publish_command_acknowledged({"command_id":"a", "hardware_id":"h", "status":"EXECUTED", "failure_reason":None}))
+        self.assertTrue(HttpCoreContextFacadeImpl(opener=opener).publish_command_acknowledged({"command_id":"a", "hardware_id":"h", "status":"EXECUTED", "failure_reason":None}).delivered)
         body=json.loads(calls[0].data); self.assertEqual(body["result"], "OK"); self.assertNotIn("status", body)
 
     def test_command_ack_treats_conflict_as_success(self):
         def opener(request, timeout): raise HTTPError(request.full_url, 409, "already acknowledged", {}, None)
-        self.assertTrue(HttpCoreContextFacadeImpl(opener=opener).publish_command_acknowledged({"command_id":"a"}))
+        self.assertTrue(HttpCoreContextFacadeImpl(opener=opener).publish_command_acknowledged({"command_id":"a"}).delivered)
 
     def test_core_client_uses_core_token_for_pull(self):
         calls = []
@@ -441,6 +449,6 @@ class HttpAdapterTests(unittest.TestCase):
         processor=TelemetryOutboxProcessor.__new__(TelemetryOutboxProcessor)
         from device.infrastructure.reliability.circuit_breaker import CircuitBreaker
         processor.circuit_breaker=CircuitBreaker(); processor.external_core_service=type("S",(),{"publish_telemetry_recorded":lambda *_:False})(); processor.outbox_repository=type("R",(),{"mark_retry":lambda self,*args:setattr(self,"retried",args),"mark_dead_letter":lambda *_:None})(); processor._build_payload=lambda _: {}; processor._calculate_next_retry=lambda _:datetime.now(timezone.utc)
-        self.assertFalse(processor._send_entry(type("E",(),{"id":1,"retry_count":0})())); self.assertTrue(hasattr(processor.outbox_repository,"retried"))
+        self.assertFalse(processor._send_entry(type("E",(),{"id":1,"retry_count":0,"event_type":"TELEMETRY_RECORDED"})())); self.assertTrue(hasattr(processor.outbox_repository,"retried"))
 
 if __name__ == "__main__": unittest.main()

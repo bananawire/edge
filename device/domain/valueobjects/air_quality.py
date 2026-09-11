@@ -1,38 +1,39 @@
-"""AirQuality value object — represents SCD41 sensor readings.
+"""AirQuality value object — SCD41 readings.
 
-Immutable value object containing CO2, temperature and humidity measurements.
+A missing or non-finite reading is a validation error, never a silent zero.
 """
 
+import math
 from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
 class AirQuality:
-    """SCD41 air quality sensor readings.
+    """CO2 in ppm, temperature in °C, relative humidity in %."""
 
-    Attributes:
-        co2: CO2 concentration in parts per million (ppm)
-        temperature: Temperature in Celsius
-        humidity: Relative humidity percentage (0-100)
-    """
     co2: float
     temperature: float
     humidity: float
 
     def __post_init__(self):
-        """Validate air quality values."""
-        if self.co2 < 0 or self.co2 > 10000:
-            raise ValueError(f"CO2 must be between 0 and 10000 ppm, got {self.co2}")
-        if self.temperature < -40 or self.temperature > 85:
-            raise ValueError(f"Temperature must be between -40 and 85°C, got {self.temperature}")
-        if self.humidity < 0 or self.humidity > 100:
-            raise ValueError(f"Humidity must be between 0 and 100%, got {self.humidity}")
+        for name, low, high in (("co2", 0, 10000), ("temperature", -40, 85), ("humidity", 0, 100)):
+            value = getattr(self, name)
+            if not isinstance(value, (int, float)) or isinstance(value, bool) or not math.isfinite(value):
+                raise ValueError(f"{name} must be a finite number, got {value!r}")
+            if value < low or value > high:
+                raise ValueError(f"{name} must be between {low} and {high}, got {value}")
+            object.__setattr__(self, name, float(value))
 
     @classmethod
     def from_dict(cls, data: dict) -> "AirQuality":
-        """Create AirQuality from dictionary payload."""
-        return cls(
-            co2=float(data.get("co2", 0)),
-            temperature=float(data.get("temperature", 0)),
-            humidity=float(data.get("humidity", 0)),
-        )
+        """Create from a payload dict; every field is required."""
+        missing = [k for k in ("co2", "temperature", "humidity") if data.get(k) is None]
+        if missing:
+            raise ValueError(f"Missing air quality field(s): {', '.join(missing)}")
+        values = {}
+        for key in ("co2", "temperature", "humidity"):
+            value = data[key]
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ValueError(f"{key} must be a number, got {value!r}")
+            values[key] = float(value)
+        return cls(**values)

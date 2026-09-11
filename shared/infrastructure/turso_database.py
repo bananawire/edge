@@ -195,17 +195,24 @@ class TursoDatabase(peewee.Database):
 
     def _connect(self):
         """Open a libsql connection. Peewee owns the returned object."""
+        # ``isolation_level=None`` puts the driver in autocommit mode, exactly as
+        # peewee's own SqliteDatabase does. Without it libsql opens an implicit
+        # transaction on the first write and every statement issued outside an
+        # explicit ``atomic()`` block is silently lost when the connection
+        # closes. Explicit transactions still work: ``begin()`` issues BEGIN.
         try:
             conn = libsql.connect(
                 self.database,
                 auth_token=self._auth_token,
+                isolation_level=None,
             )
         except TypeError:
-            # Older libsql builds may not accept ``auth_token``; fall back
-            # to positional connect for local files only.
+            # Older libsql builds may not accept these keywords; fall back to
+            # positional connect for local files only and commit eagerly.
             if self._auth_token and _is_remote_turso_url(self.database):
                 raise
             conn = libsql.connect(self.database)
+            conn.isolation_level = None
         return conn
 
     def _set_server_version(self, conn) -> None:

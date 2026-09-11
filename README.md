@@ -117,29 +117,43 @@ X-Hardware-Id: <hardware-id-del-dispositivo>
 X-API-Key: <api-key-del-dispositivo>
 ```
 
-**Body (JSON):**
+**Body (JSON)** — contrato v1, ver `clair-core/docs/contracts/edge-v1/device-edge/telemetry.request.json`:
 
 ```json
 {
-  "co2": 420.5,
-  "pm25": 35.2,
-  "created_at": "2026-05-16T22:30:00-05:00"
+  "deviceId": "CLAIR-0001",
+  "reading_id": "40e67f87-2c0a-47ef-a3ed-7999e106cc9c",
+  "measured_at": "2026-09-11T14:30:25.123Z",
+  "timestamp": "14:30:25",
+  "uptime": "01:00:00",
+  "airQuality": { "co2": 812.5, "temperature": 22.5, "humidity": 45.0 },
+  "particulateMatter": { "pm1_0": 3.2, "pm2_5": 8.05, "pm10": 12.4 },
+  "connectivity": { "status": "connected", "network": "room-wifi", "signalStrength": -50 },
+  "location": { "country": "PERU" },
+  "healthStatus": 100,
+  "status": "Optimal"
 }
 ```
 
 | Campo | Tipo | Requerido | Descripción |
 |---|---|---|---|
-| `co2` | number | Sí | Concentración de CO2 en ppm (rango: 0–5000) |
-| `pm25` | number | Sí | Material particulado PM2.5 en µg/m³ (rango: 0–500) |
-| `created_at` | string | No | Timestamp ISO 8601; si se omite usa UTC actual |
+| `reading_id` | UUID | Sí (v1) | Identidad estable de la muestra, generada por el firmware. Un reintento exacto devuelve el mismo registro; un cambio bajo la misma identidad responde `409`. |
+| `measured_at` | ISO-8601 con offset | Sí (v1) | Instante de medición. Sin offset se rechaza. |
+| `airQuality.*`, `particulateMatter.*` | number | Sí | Todos los campos son obligatorios y finitos; nunca se rellenan con cero. PM conserva decimales. |
+| `timestamp`, `uptime` | string | Sí | Hora local y uptime del dispositivo, solo informativos. |
+
+Clientes *legacy* (sin `reading_id` ni `measured_at`): el edge acuña un UUID una vez y usa su hora de
+recepción marcada como `time_source = "edge_receipt"`. Con `EDGE_REQUIRE_MEASURED_AT=true` esos
+envíos se rechazan con `400`.
 
 **Respuestas:**
 
 | Código | Condición | Body |
 |---|---|---|
-| `201` | Registro creado | `{"id": 1, "hardware_id": "...", "co2": 420.5, "pm25": 35.2, "created_at": "..."}` |
+| `201` | Registro almacenado (o reintento exacto, `duplicate: true`) | `{"id": 1842, "reading_id": "...", "device_id": "CLAIR-0001", "measured_at": "...", "received_at": "...", "time_source": "device", "duplicate": false}` |
 | `400` | Campos faltantes o valores inválidos | `{"error": "..."}` |
 | `401` | Credenciales inválidas o dispositivo no autorizado | `{"error": "..."}` |
+| `409` | Mismo `reading_id` con datos distintos | `{"error": "..."}` |
 
 ### Probar con curl
 
@@ -168,7 +182,10 @@ Variables relevantes:
 | `EDGE_TURSO_URL` | (vacío) | URL `libsql://...` de la base Turso remota. Si está definida, el edge escribe contra Turso y `EDGE_DATABASE_PATH` se ignora. |
 | `EDGE_TURSO_TOKEN` | (vacío) | JWT emitido por `turso db tokens create` para autenticar el cliente libsql contra Turso. Requerido en producción. |
 | `EDGE_DATABASE_PATH` | `clair_edge.db` | Fallback local: ruta del archivo libSQL usada solo cuando `EDGE_TURSO_URL` está vacío (tests unitarios, desarrollo offline). |
-| `CLAIR_CORE_BASE_URL` | `https://core.example.internal` | URL base de clair-core (HTTPS fuera de localhost) |
+| `CLAIR_CORE_BASE_URL` | `http://localhost:49220` | URL base de clair-core. HTTP solo para loopback; HTTPS en cualquier otro host. |
+| `CLAIR_CORE_ALLOW_INSECURE_HTTP` | `false` | Permite HTTP hacia nombres de red local/contenedor (p. ej. `http://clair-core:49220`) en una red de confianza. |
+| `EDGE_REQUIRE_MEASURED_AT` | `false` | Rechaza telemetría sin `measured_at` (activar cuando todo el firmware envíe el contrato v1). |
+| `EDGE_OUTBOX_DEAD_LETTER_RETENTION_HOURS` | `168` | Retención de entregas en cuarentena antes de purgarlas. |
 | `EDGE_TO_CORE_TOKEN` | (requerido) | Token para llamadas edge → core |
 | `EDGE_TOKEN` | (requerido) | Token para notificaciones core → edge |
 | `DEVICE_ROSTER_POLL_INTERVAL_SECONDS` | `30` | Intervalo del roster |
@@ -206,6 +223,25 @@ Las entradas legacy sin snapshot inmutable no se reconstruyen desde aggregates
 mutables: el worker las marca `dead_letter` y registra que requieren replay
 manual desde un payload confiable. Las entradas nuevas siempre guardan el
 snapshot en la misma transacción que el ACK o la telemetría.
+
+## Outbox: entregas en cuarentena y reintentos
+
+Cada lectura y cada ACK se guardan en el outbox en la misma transacción que el dato y se entregan al
+core en segundo plano. Los fallos se clasifican: red/timeout/5xx se reintentan indefinidamente con
+backoff (máx. 5 min); `401/403` se marcan `BLOCKED` (revisar `EDGE_TO_CORE_TOKEN`) y se reintentan
+cada 5 min; rechazos permanentes del core (`VALIDATION_ERROR`) quedan en cuarentena con el motivo.
+
+```bash
+uv run python -m tools.outbox status
+uv run python -m tools.outbox list
+uv run python -m tools.outbox show 1842
+uv run python -m tools.outbox replay 1842
+uv run python -m tools.outbox purge --older-than-hours 168
+```
+
+Antes de cualquier migración de esquema el edge copia el archivo SQLite a `<archivo>.bak-<fecha>`.
+Las tablas de telemetría con esquema incompatible se renombran a `device_telemetry_legacy_<fecha>`;
+nunca se borran filas.
 
 ## Inspeccionar la Base de Datos
 

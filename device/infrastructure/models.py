@@ -17,45 +17,50 @@ from shared.infrastructure.database import db
 
 
 class DeviceTelemetryModel(Model):
-    """Peewee model representing the 'device_telemetry' table in SQLite.
+    """Peewee model for the 'device_telemetry' table.
 
-    Stores optimized telemetry readings with only the fields sent by
-    the embedded device: environmental sensors, connectivity status,
-    location, health status, and overall device state.
+    ``recorded_at`` is the measurement instant (contract name ``measured_at``);
+    ``received_at`` is edge receipt metadata. ``reading_id`` is unique per
+    device so a device-hop retry is recognised. Legacy rows may carry NULLs
+    in the newer columns; SQLite treats NULLs as distinct in unique indexes.
     """
 
     id = AutoField()
 
     device_id = CharField(index=True)
+    reading_id = CharField(null=True)
 
-    device_time = CharField()          # e.g., "14:30:25"
-    uptime_seconds = IntegerField()    # Parsed from HH:MM:SS
+    device_time = CharField()          # e.g., "14:30:25" (display only)
+    uptime_seconds = IntegerField()
 
     co2 = FloatField()
     temperature = FloatField()
     humidity = FloatField()
 
-    pm1_0 = IntegerField()
-    pm2_5 = IntegerField()
-    pm10 = IntegerField()
+    pm1_0 = FloatField()
+    pm2_5 = FloatField()
+    pm10 = FloatField()
 
     wifi_status = CharField()
-    network_name = CharField(default="")     # WiFi network/SSID (e.g., "Wokwi-GUEST")
-    signal_strength = IntegerField(default=0)  # WiFi signal strength in dBm (e.g., -65)
+    network_name = CharField(default="")
+    signal_strength = IntegerField(default=0)
 
-    country = CharField(default="")          # Device location country (e.g., "PERU")
+    country = CharField(default="")
 
-    health_status = IntegerField(default=100)  # Device health status percentage (0-100)
+    health_status = IntegerField(default=100)
 
     status = CharField()
 
     recorded_at = DateTimeField()
+    received_at = DateTimeField(null=True)
+    time_source = CharField(default="device")
 
     class Meta:
         database = db
         table_name = 'device_telemetry'
         indexes = (
             (('device_id', 'recorded_at'), False),
+            (('device_id', 'reading_id'), True),
         )
 
 

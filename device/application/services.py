@@ -7,7 +7,10 @@ outbound delivery to clair-core via the outbox pattern and HTTP.
 
 import json
 import logging
+from dataclasses import dataclass
 from datetime import datetime, timezone
+
+from peewee import IntegrityError
 
 from device.domain.commands import (
     AcknowledgeEmbeddedDeviceCommandCommand,
@@ -19,6 +22,7 @@ from device.domain.entities import (
     DeviceTelemetry,
     EdgeDeviceCommandStatus,
 )
+from device.domain.errors import TelemetryConflictError
 from device.domain.outbox_entry import OutboxEntry
 from device.domain.services import DeviceTelemetryService
 from device.application.outboundservices.acl.external_core_service import ExternalCoreService
@@ -27,21 +31,34 @@ from device.infrastructure.models import DeviceCommandModel
 from device.infrastructure.repositories import DeviceCommandRepository, DeviceTelemetryRepository
 from iam.infrastructure.repositories import DeviceRepository
 from shared.infrastructure.database import db
+from shared.infrastructure.environment import get_edge_require_measured_at
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class TelemetryIngestionResult:
+    """What the device hop produced: the stored reading and whether it already existed."""
+
+    record: DeviceTelemetry
+    duplicate: bool
 
 
 class DeviceTelemetryAppService:
     """Application service for device telemetry workflows.
 
-    Coordinates between IAM (device verification), Device domain
-    (telemetry validation), Device infrastructure (local persistence),
-    and the outbox (guaranteed forward to clair-core via HTTP).
+    Coordinates device verification (IAM cache), domain validation, local
+    persistence and the outbox row that guarantees delivery to clair-core.
+    The device hop is idempotent on ``(hardware_id, reading_id)``: an exact
+    retry returns the stored reading, a changed payload under the same
+    identity is a conflict.
     """
 
     def __init__(self):
         self.telemetry_repository = DeviceTelemetryRepository()
-        self.telemetry_service = DeviceTelemetryService()
+        self.telemetry_service = DeviceTelemetryService(
+            require_measured_at=get_edge_require_measured_at()
+        )
         self.device_repository = DeviceRepository()
         self.outbox_repository = OutboxRepository()
 
@@ -50,21 +67,15 @@ class DeviceTelemetryAppService:
         command: CreateFullTelemetryRecordCommand,
         raw_payload: dict | None = None,
     ) -> DeviceTelemetry:
-        """Create, persist locally, and queue for core delivery a telemetry record.
+        """Create, persist locally and queue for core delivery; returns the stored reading."""
+        return self.ingest(command).record
 
-        The outbox entry is written within the same database transaction
-        as the telemetry record, ensuring at-least-once HTTP delivery
-        without blocking the device response.
-
-        Args:
-            command: CreateFullTelemetryRecordCommand with device telemetry data.
-            raw_payload: Optional original device payload dict to forward to Core.
-
-        Returns:
-            The persisted DeviceTelemetry domain entity with assigned ID.
+    def ingest(self, command: CreateFullTelemetryRecordCommand) -> TelemetryIngestionResult:
+        """Idempotent ingestion of one reading.
 
         Raises:
-            ValueError: If device not found, or any validation fails.
+            ValueError: unknown device or invalid measurement.
+            TelemetryConflictError: same reading identity, different measurement data.
         """
         device = self.device_repository.find_by_hardware_id(command.hardware_id)
         if device is None:
@@ -73,28 +84,48 @@ class DeviceTelemetryAppService:
         record = self.telemetry_service.create_record_from_command(command)
 
         with db.atomic():
-            persisted = self.telemetry_repository.save(record)
+            existing = self.telemetry_repository.find_by_device_and_reading_id(
+                record.device_id, record.reading_id
+            )
+            if existing is None:
+                try:
+                    persisted = self._store(record)
+                    return TelemetryIngestionResult(record=persisted, duplicate=False)
+                except IntegrityError:
+                    # Two identical retries raced past the lookup; the unique index kept one row.
+                    existing = self.telemetry_repository.find_by_device_and_reading_id(
+                        record.device_id, record.reading_id
+                    )
+                    if existing is None:
+                        raise
+            if not existing.has_same_measurement(record):
+                raise TelemetryConflictError(
+                    f"reading_id {record.reading_id} already stored with different measurement data"
+                )
+            return TelemetryIngestionResult(record=existing, duplicate=True)
 
-            # The outbox is part of the same transaction as the record. Never
-            # make durable delivery depend on whether the HTTP payload happened
-            # to be supplied, and never swallow a persistence failure here.
-            outbox_entry = OutboxEntry(
+    def _store(self, record: DeviceTelemetry) -> DeviceTelemetry:
+        # Savepoint: an IntegrityError must not poison the enclosing transaction.
+        with db.atomic():
+            persisted = self.telemetry_repository.save(record)
+            # The outbox row is part of the same transaction as the reading. Never make durable
+            # delivery depend on request details, and never swallow a persistence failure here.
+            self.outbox_repository.save(OutboxEntry(
                 aggregate_type="TELEMETRY",
                 aggregate_id=persisted.id,
                 event_type="TELEMETRY_RECORDED",
                 payload=json.dumps(_telemetry_payload(persisted), separators=(",", ":"), sort_keys=True),
-            )
-            self.outbox_repository.save(outbox_entry)
-
-        return persisted
+            ))
+            return persisted
 
 
 def _telemetry_payload(record: DeviceTelemetry) -> dict:
-    """Create the immutable integration snapshot for a telemetry record."""
+    """The immutable core batch record for a reading (contract v1, core-edge/telemetry.batch.request)."""
     return {
         "client_ref": str(record.id),
+        "reading_id": record.reading_id,
         "device_id": record.device_id,
-        "device_time": record.device_time,
+        "occurred_at": record.recorded_at.isoformat(),
         "uptime_seconds": record.uptime_seconds,
         "co2": record.air_quality.co2,
         "temperature": record.air_quality.temperature,
@@ -108,10 +139,8 @@ def _telemetry_payload(record: DeviceTelemetry) -> dict:
         "country": record.location.country,
         "health_status": record.health_status,
         "status": record.status,
+        # Kept for readers of older snapshots; core ignores it.
         "recorded_at": record.recorded_at.isoformat(),
-        # Use the persisted event time, not processing time, so retries are
-        # byte-for-byte stable.
-        "occurred_at": record.recorded_at.isoformat(),
     }
 
 

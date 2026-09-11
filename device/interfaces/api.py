@@ -12,6 +12,7 @@ from device.domain.commands import (
     AcknowledgeEmbeddedDeviceCommandCommand,
     CreateFullTelemetryRecordCommand,
 )
+from device.domain.errors import TelemetryConflictError
 from device.domain.queries import GetDeviceConnectionStatusQuery
 from device.interfaces.resources import (
     AcknowledgeDeviceCommandRequest,
@@ -29,44 +30,21 @@ connection_status_query_handler = GetDeviceConnectionStatusQueryHandler()
 
 @device_api.route("/api/v1/device/telemetry", methods=["POST"])
 def create_telemetry_record():
-    """Create a new telemetry data record for an authenticated device.
+    """Store one reading from an authenticated device (contract v1, device-edge/telemetry.*).
 
     Headers:
         Content-Type: application/json
         X-Hardware-Id: <physical hardware identifier>
         X-API-Key: <device secret key>
 
-    Body (JSON) — Optimized Payload:
-        {
-            "deviceId": "CLAIR-0001",
-            "timestamp": "16:57:17",
-            "uptime": "00:00:15",
-            "airQuality": {
-                "co2": 420,
-                "temperature": 24.99893,
-                "humidity": 50
-            },
-            "particulateMatter": {
-                "pm1_0": 12,
-                "pm2_5": 20,
-                "pm10": 32
-            },
-            "connectivity": {
-                "status": "connected",
-                "network": "Wokwi-GUEST",
-                "signalStrength": -65
-            },
-            "location": {
-                "country": "PERU"
-            },
-            "healthStatus": 100,
-            "status": "Optimal"
-        }
+    Body: see docs/contracts/edge-v1/device-edge/telemetry.request.json. ``reading_id`` and
+    ``measured_at`` identify the sample; when both are absent the client is treated as legacy.
 
     Returns:
-        201: Record created successfully.
+        201: Reading stored (``duplicate`` is true for an exact retry).
         400: Missing fields, invalid values, or malformed request.
         401: Missing credentials or authentication failure.
+        409: Same reading_id already stored with different measurement data.
     """
     auth_error = authenticate_request(update_last_seen=True)
     if auth_error is not None:
@@ -74,6 +52,8 @@ def create_telemetry_record():
 
     try:
         data = request.get_json()
+        if not isinstance(data, dict):
+            return jsonify({"error": "JSON body must be an object"}), 400
         telemetry_request = TelemetryRequest.from_dict(data)
 
         hardware_id = request.headers.get("X-Hardware-Id") or telemetry_request.device_id
@@ -97,44 +77,27 @@ def create_telemetry_record():
                 "network": telemetry_request.connectivity.network,
                 "signalStrength": telemetry_request.connectivity.signal_strength,
             },
-            location={
-                "country": telemetry_request.location.country,
-            },
+            location={"country": telemetry_request.location.country},
             health_status=telemetry_request.health_status,
             status=telemetry_request.status,
-            created_at=telemetry_request.created_at,
+            reading_id=telemetry_request.reading_id,
+            measured_at=telemetry_request.measured_at,
         )
 
-        record = telemetry_service.create_full_telemetry_record(command, raw_payload=data)
-
+        result = telemetry_service.ingest(command)
+        record = result.record
         return jsonify({
             "id": record.id,
+            "reading_id": record.reading_id,
             "device_id": record.device_id,
-            "device_time": record.device_time,
-            "uptime_seconds": record.uptime_seconds,
-            "air_quality": {
-                "co2": record.air_quality.co2,
-                "temperature": record.air_quality.temperature,
-                "humidity": record.air_quality.humidity,
-            },
-            "particulate_matter": {
-                "pm1_0": record.particulate_matter.pm1_0,
-                "pm2_5": record.particulate_matter.pm2_5,
-                "pm10": record.particulate_matter.pm10,
-            },
-            "connectivity": {
-                "status": record.connectivity.status,
-                "network": record.connectivity.network,
-                "signal_strength": record.connectivity.signal_strength,
-            },
-            "location": {
-                "country": record.location.country,
-            },
-            "health_status": record.health_status,
-            "status": record.status,
-            "recorded_at": record.recorded_at.isoformat(),
+            "measured_at": record.recorded_at.isoformat(),
+            "received_at": record.received_at.isoformat() if record.received_at else None,
+            "time_source": record.time_source,
+            "duplicate": result.duplicate,
         }), 201
 
+    except TelemetryConflictError as e:
+        return jsonify({"error": str(e)}), 409
     except KeyError as e:
         return jsonify({"error": f"Missing required field: {str(e)}"}), 400
     except ValueError as e:

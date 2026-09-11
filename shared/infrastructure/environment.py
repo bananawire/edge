@@ -44,6 +44,60 @@ def get_edge_turso_token() -> str:
     return os.getenv("EDGE_TURSO_TOKEN", "").strip()
 
 
+def _flag(name: str, default: bool = False) -> bool:
+    value = os.getenv(name, "").strip().lower()
+    if not value:
+        return default
+    return value in ("1", "true", "yes", "on")
+
+
+def get_core_base_url() -> str:
+    """Return the clair-core base URL every edge->core client uses.
+
+    Defaults to the core's own default port on this laptop. Plain HTTP is
+    accepted for loopback hosts and, when ``CLAIR_CORE_ALLOW_INSECURE_HTTP``
+    is set, for private/container hostnames on a trusted local network.
+    Anything else must be HTTPS.
+    """
+    from urllib.parse import urlparse
+
+    raw = _optional("CLAIR_CORE_BASE_URL", "http://localhost:49220").rstrip("/")
+    parsed = urlparse(raw)
+    if parsed.scheme.lower() == "https":
+        return raw
+    if parsed.scheme.lower() != "http":
+        raise ValueError("CLAIR_CORE_BASE_URL must be an http(s) URL")
+    if parsed.hostname in {"localhost", "127.0.0.1", "::1"} or _flag("CLAIR_CORE_ALLOW_INSECURE_HTTP"):
+        return raw
+    raise ValueError(
+        "CLAIR_CORE_BASE_URL must use HTTPS outside localhost "
+        "(set CLAIR_CORE_ALLOW_INSECURE_HTTP=true only on a trusted local network)"
+    )
+
+
+def get_core_http_timeout() -> float:
+    try:
+        return max(float(os.getenv("CLAIR_CORE_HTTP_TIMEOUT", "10")), 1.0)
+    except ValueError:
+        return 10.0
+
+
+def get_edge_to_core_token() -> str:
+    return os.getenv("EDGE_TO_CORE_TOKEN", "").strip()
+
+
+def get_edge_require_measured_at() -> bool:
+    """When true, a reading without ``measured_at`` is rejected instead of stamped with receipt time."""
+    return _flag("EDGE_REQUIRE_MEASURED_AT", default=False)
+
+
+def get_outbox_dead_letter_retention_hours() -> float:
+    try:
+        return max(float(os.getenv("EDGE_OUTBOX_DEAD_LETTER_RETENTION_HOURS", "168")), 1.0)
+    except ValueError:
+        return 168.0
+
+
 def get_positive_interval(name: str, default: float, minimum: float = 0.1) -> float:
     """Read a worker interval safely, preventing a busy loop from bad config."""
     raw = os.getenv(name)

@@ -33,6 +33,7 @@ class DeviceTelemetryRepository:
         """
         model = DeviceTelemetryModel.create(
             device_id=telemetry.device_id,
+            reading_id=telemetry.reading_id,
             device_time=telemetry.device_time,
             uptime_seconds=telemetry.uptime_seconds,
             co2=telemetry.air_quality.co2,
@@ -48,9 +49,19 @@ class DeviceTelemetryRepository:
             health_status=telemetry.health_status,
             status=telemetry.status,
             recorded_at=telemetry.recorded_at,
+            received_at=telemetry.received_at,
+            time_source=telemetry.time_source,
         )
 
         return self._model_to_entity(model)
+
+    def find_by_device_and_reading_id(self, device_id: str, reading_id: str) -> Optional[DeviceTelemetry]:
+        """Find the reading a device already sent under this identity, if any."""
+        model = DeviceTelemetryModel.get_or_none(
+            (DeviceTelemetryModel.device_id == device_id)
+            & (DeviceTelemetryModel.reading_id == reading_id)
+        )
+        return self._model_to_entity(model) if model is not None else None
 
     def find_by_id(self, record_id: int) -> Optional[DeviceTelemetry]:
         """Find a telemetry record by its database ID.
@@ -122,6 +133,7 @@ class DeviceTelemetryRepository:
         return DeviceTelemetry(
             id=model.id,
             device_id=model.device_id,
+            reading_id=model.reading_id or f"legacy-{model.id}",
             device_time=model.device_time,
             uptime_seconds=model.uptime_seconds,
             air_quality=air_quality,
@@ -130,8 +142,20 @@ class DeviceTelemetryRepository:
             location=location,
             health_status=model.health_status,
             status=model.status,
-            recorded_at=model.recorded_at,
+            recorded_at=_as_utc(model.recorded_at),
+            received_at=_as_utc(model.received_at),
+            time_source=model.time_source or DeviceTelemetry.TIME_SOURCE_DEVICE,
         )
+
+
+def _as_utc(value: Optional[datetime]) -> Optional[datetime]:
+    """libsql returns naive datetimes for values stored via isoformat; they are UTC."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        from dateutil import parser as dateutil_parser
+        value = dateutil_parser.isoparse(value)
+    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
 
 
 class DeviceCommandRepository:

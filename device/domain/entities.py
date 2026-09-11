@@ -28,24 +28,24 @@ class EdgeDeviceCommandStatus(str, Enum):
 
 
 class DeviceTelemetry:
-    """Aggregate root entity representing an optimized device telemetry reading.
-
-    Encapsulates only the data sent by the embedded device in the lightweight
-    payload: environmental sensors, connectivity status, location, health status, and overall state.
+    """Aggregate root for one reading received from the embedded device.
 
     Attributes:
         id: Auto-incremented database ID (None before persistence).
-        device_id: Logical identifier of the source device.
-        device_time: Device local time as string (e.g., "14:30:25").
-        uptime_seconds: System uptime in seconds (parsed from HH:MM:SS).
-        air_quality: SCD41 CO2/temperature/humidity readings (value object).
-        particulate_matter: PMS5003 PM1.0/PM2.5/PM10 readings (value object).
-        connectivity: WiFi connection status (value object).
-        location: Device geographical location (value object).
+        device_id: Hardware identifier of the source device.
+        reading_id: Stable UUID of this sample; firmware-owned, edge-minted only for legacy clients.
+        device_time: Device wall-clock string as sent (display only).
+        uptime_seconds: System uptime in seconds.
+        air_quality / particulate_matter / connectivity / location: value objects.
         health_status: Device health status percentage (0-100).
         status: Overall device status string.
-        recorded_at: UTC timestamp when the reading was recorded by edge.
+        recorded_at: Measurement instant (UTC). Named for compatibility; it is ``measured_at``.
+        received_at: When the edge accepted the reading (UTC). Metadata only.
+        time_source: "device" when the firmware supplied the instant, "edge_receipt" otherwise.
     """
+
+    TIME_SOURCE_DEVICE = "device"
+    TIME_SOURCE_EDGE_RECEIPT = "edge_receipt"
 
     def __init__(
         self,
@@ -59,10 +59,15 @@ class DeviceTelemetry:
         health_status: int,
         status: str,
         recorded_at: datetime,
+        reading_id: str,
+        received_at: Optional[datetime] = None,
+        time_source: str = TIME_SOURCE_DEVICE,
         id: Optional[int] = None,
     ):
         if not device_id:
             raise ValueError("device_id is required")
+        if not reading_id:
+            raise ValueError("reading_id is required")
         if not device_time:
             raise ValueError("device_time is required")
         if air_quality is None:
@@ -79,9 +84,12 @@ class DeviceTelemetry:
             raise ValueError("status is required")
         if recorded_at is None:
             raise ValueError("recorded_at is required")
+        if time_source not in (self.TIME_SOURCE_DEVICE, self.TIME_SOURCE_EDGE_RECEIPT):
+            raise ValueError("time_source must be device or edge_receipt")
 
         self.id = id
         self.device_id = device_id
+        self.reading_id = reading_id
         self.device_time = device_time
         self.uptime_seconds = uptime_seconds
         self.air_quality = air_quality
@@ -91,8 +99,25 @@ class DeviceTelemetry:
         self.health_status = health_status
         self.status = status
         self.recorded_at = recorded_at
+        self.received_at = received_at
+        self.time_source = time_source
 
+    @property
+    def measured_at(self) -> datetime:
+        return self.recorded_at
 
+    def has_same_measurement(self, other: "DeviceTelemetry") -> bool:
+        """Whether ``other`` is a byte-for-byte retry of this reading."""
+        return (
+            self.recorded_at == other.recorded_at
+            and self.uptime_seconds == other.uptime_seconds
+            and self.air_quality == other.air_quality
+            and self.particulate_matter == other.particulate_matter
+            and self.connectivity == other.connectivity
+            and self.location == other.location
+            and self.health_status == other.health_status
+            and self.status == other.status
+        )
 
 
 class DeviceCommand:

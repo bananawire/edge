@@ -6,6 +6,7 @@ protection for publishing telemetry and command ACK integration events.
 
 import json
 import logging
+import random
 import threading
 import time
 from datetime import datetime, timedelta, timezone
@@ -14,6 +15,7 @@ from typing import Optional
 from device.application.outboundservices.acl.external_core_service import (
     ExternalCoreService,
 )
+from device.application.outboundservices.acl.delivery_result import DeliveryOutcome, DeliveryResult
 from device.domain.outbox_entry import OutboxEntry
 from device.infrastructure.outbox.outbox_repository import OutboxRepository
 from device.infrastructure.repositories import DeviceCommandRepository, DeviceTelemetryRepository
@@ -22,7 +24,7 @@ from device.infrastructure.reliability.circuit_breaker import (
     CircuitBreakerOpenException,
 )
 from shared.infrastructure.database import db
-from shared.infrastructure.environment import get_positive_interval
+from shared.infrastructure.environment import get_outbox_dead_letter_retention_hours, get_positive_interval
 
 logger = logging.getLogger(__name__)
 
@@ -31,16 +33,36 @@ class LegacyOutboxPayloadUnavailableError(ValueError):
     """A legacy row has no immutable event snapshot to deliver safely."""
 
 
-class TelemetryOutboxProcessor:
-    """Polls the outbox and asynchronously publishes integration events to HTTP.
+class DeliveryRetryableError(RuntimeError):
+    """Raised inside the breaker so transient and blocked outcomes count as failures."""
 
-    Guarantees at-least-once delivery by retrying with exponential backoff.
-    Protects HTTP from overload via circuit breaker.
+    def __init__(self, result: DeliveryResult):
+        super().__init__(result.reason)
+        self.result = result
+
+
+class TelemetryOutboxProcessor:
+    """Polls the outbox and publishes integration events to clair-core over HTTP.
+
+    Delivery outcomes are classified (see ``DeliveryResult``):
+
+    - DELIVERED: mark sent.
+    - RETRY: exponential backoff with jitter, capped, retried indefinitely. An
+      extended core outage therefore never turns readings into dead letters.
+    - BLOCKED: auth or configuration failure; kept pending with a long backoff
+      and logged at ERROR so an operator notices.
+    - REJECTED: core validated and refused the record; quarantined (dead letter)
+      with the reason so it can be inspected or replayed with the tooling.
+
+    The circuit breaker observes RETRY and BLOCKED as failures, so a dead core
+    opens it and the loop pauses instead of hammering it.
     """
 
-    MAX_RETRIES = 5
     BASE_DELAY_SECONDS = 5
     MAX_DELAY_SECONDS = 300
+    BLOCKED_DELAY_SECONDS = 300
+    # DEVICE_NOT_FOUND is retried this many times (roster lag) before quarantine.
+    NOT_FOUND_RETRY_BUDGET = 12
     POLL_INTERVAL_SECONDS = 5
     CLEANUP_INTERVAL_SECONDS = 300  # 5 minutes
     BATCH_SIZE = 10
@@ -62,7 +84,7 @@ class TelemetryOutboxProcessor:
         if self._running:
             return
         self._running = True
-        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread = threading.Thread(target=self._run, daemon=True, name="telemetry-outbox")
         self._thread.start()
         logger.info("TelemetryOutboxProcessor started")
 
@@ -92,7 +114,7 @@ class TelemetryOutboxProcessor:
             time.sleep(interval)
 
     def _process_batch(self) -> None:
-        """Fetch and attempt to publish pending outbox entries to HTTP."""
+        """Fetch and attempt to publish pending outbox entries."""
         entries = self.outbox_repository.find_pending(limit=self.BATCH_SIZE)
         if not entries:
             return
@@ -111,64 +133,67 @@ class TelemetryOutboxProcessor:
                 )
 
     def _send_entry(self, entry: OutboxEntry) -> bool:
-        """Attempt to publish a single outbox entry to HTTP.
-
-        Args:
-            entry: OutboxEntry to publish.
-
-        Returns:
-            True if published successfully, False otherwise.
-        """
+        """Attempt one delivery of an outbox entry and record the classified outcome."""
         try:
             payload = self._build_payload(entry)
-            publisher = (self.external_core_service.publish_command_acknowledged
-                         if entry.event_type == "COMMAND_ACKNOWLEDGED"
-                         else self.external_core_service.publish_telemetry_recorded)
-            published = self.circuit_breaker.call(publisher, payload)
-            if not published:
-                raise RuntimeError("Core rejected telemetry delivery")
-            self.outbox_repository.mark_sent(entry.id)
-            logger.info("Outbox entry %s published to HTTP", entry.id)
-            return True
-        except CircuitBreakerOpenException:
-            raise
         except LegacyOutboxPayloadUnavailableError as exc:
-            # Legacy rows predate immutable snapshots.  Do not rebuild an ACK
-            # or telemetry event from mutable aggregate state: that could send
-            # a different event than the one originally enqueued.  Quarantine
-            # the row explicitly so operators can replay it from a trusted
-            # historical payload if one exists.
+            # Legacy rows predate immutable snapshots. Never rebuild an event from mutable
+            # aggregate state: quarantine so an operator can replay from a trusted source.
             self.outbox_repository.mark_dead_letter(entry.id, str(exc))
             logger.error("Outbox entry %s quarantined: %s", entry.id, exc)
             return False
-        except Exception as exc:
-            error = str(exc)
-            if entry.retry_count >= self.MAX_RETRIES:
-                self.outbox_repository.mark_dead_letter(entry.id, error)
-                logger.error(
-                    "Outbox entry %s moved to dead letter after %s retries: %s",
-                    entry.id,
-                    entry.retry_count,
-                    error,
-                )
-            else:
-                next_retry = self._calculate_next_retry(entry.retry_count)
-                self.outbox_repository.mark_retry(entry.id, next_retry, error)
-                logger.info(
-                    "Outbox entry %s scheduled for retry %s at %s",
-                    entry.id,
-                    entry.retry_count + 1,
-                    next_retry.isoformat(),
-                )
+
+        publisher = (self.external_core_service.publish_command_acknowledged
+                     if entry.event_type == "COMMAND_ACKNOWLEDGED"
+                     else self.external_core_service.publish_telemetry_recorded)
+        try:
+            result = self.circuit_breaker.call(self._deliver, publisher, payload)
+        except CircuitBreakerOpenException:
+            raise
+        except DeliveryRetryableError as exc:
+            result = exc.result
+        except Exception as exc:  # adapter bug or unexpected transport error: retry, don't lose
+            result = DeliveryResult.retry(f"unexpected delivery error: {exc}")
+
+        if result.outcome is DeliveryOutcome.DELIVERED:
+            self.outbox_repository.mark_sent(entry.id)
+            logger.info("Outbox entry %s delivered to core", entry.id)
+            return True
+        if result.outcome is DeliveryOutcome.REJECTED:
+            self.outbox_repository.mark_dead_letter(entry.id, result.reason)
+            logger.error("Outbox entry %s quarantined: %s", entry.id, result.reason)
             return False
+        if result.outcome is DeliveryOutcome.BLOCKED:
+            next_retry = datetime.now(timezone.utc) + timedelta(seconds=self.BLOCKED_DELAY_SECONDS)
+            self.outbox_repository.mark_retry(entry.id, next_retry, f"BLOCKED: {result.reason}")
+            logger.error("Outbox entry %s blocked by core (%s); will retry at %s",
+                         entry.id, result.reason, next_retry.isoformat())
+            return False
+        # RETRY
+        if result.reason == "core: DEVICE_NOT_FOUND" and entry.retry_count >= self.NOT_FOUND_RETRY_BUDGET:
+            self.outbox_repository.mark_dead_letter(
+                entry.id, f"{result.reason} after {entry.retry_count} retries")
+            logger.error("Outbox entry %s quarantined: device unknown to core", entry.id)
+            return False
+        next_retry = self._calculate_next_retry(entry.retry_count)
+        self.outbox_repository.mark_retry(entry.id, next_retry, result.reason)
+        logger.info("Outbox entry %s scheduled for retry %s at %s (%s)",
+                    entry.id, entry.retry_count + 1, next_retry.isoformat(), result.reason)
+        return False
+
+    @staticmethod
+    def _deliver(publisher, payload: dict) -> DeliveryResult:
+        """Run inside the breaker: anything that is not a final answer counts as a failure."""
+        result = publisher(payload)
+        if not isinstance(result, DeliveryResult):
+            # Backwards compatibility with boolean publishers.
+            result = DeliveryResult.delivered_ok() if result else DeliveryResult.retry("delivery returned False")
+        if result.outcome in (DeliveryOutcome.RETRY, DeliveryOutcome.BLOCKED):
+            raise DeliveryRetryableError(result)
+        return result
 
     def _build_payload(self, entry: OutboxEntry) -> dict:
-        """Return the immutable snapshot, rejecting legacy rows explicitly.
-
-        Rows created before the payload column cannot be reconstructed safely:
-        the command or telemetry aggregate may have changed since enqueue. They
-        are quarantined by ``_send_entry`` instead of publishing mutable state.
-        """
+        """Return the immutable snapshot, rejecting legacy rows explicitly."""
         if entry.aggregate_type not in {"COMMAND", "TELEMETRY"}:
             raise ValueError(f"Unsupported outbox event: {entry.aggregate_type}/{entry.event_type}")
         expected_event = ("COMMAND_ACKNOWLEDGED" if entry.aggregate_type == "COMMAND"
@@ -182,23 +207,18 @@ class TelemetryOutboxProcessor:
         return json.loads(entry.payload)
 
     def _calculate_next_retry(self, retry_count: int) -> datetime:
-        """Calculate next retry timestamp using exponential backoff.
-
-        Args:
-            retry_count: Current number of failed attempts.
-
-        Returns:
-            UTC datetime for the next retry attempt.
-        """
-        delay = min(
-            self.BASE_DELAY_SECONDS * (2 ** retry_count),
-            self.MAX_DELAY_SECONDS,
-        )
+        """Exponential backoff, capped, with up to 25% jitter so retries do not synchronise."""
+        delay = min(self.BASE_DELAY_SECONDS * (2 ** min(retry_count, 16)), self.MAX_DELAY_SECONDS)
+        delay = delay * (1 + random.uniform(0, 0.25))
         return datetime.now(timezone.utc) + timedelta(seconds=delay)
 
     def _cleanup_sent(self) -> None:
-        """Delete old sent outbox records to prevent table bloat."""
-        cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
-        deleted = self.outbox_repository.delete_sent_older_than(cutoff)
+        """Retention: drop sent rows after a day and quarantined rows after the configured window."""
+        now = datetime.now(timezone.utc)
+        deleted = self.outbox_repository.delete_sent_older_than(now - timedelta(hours=24))
         if deleted:
             logger.info("Cleaned up %s old sent outbox records", deleted)
+        expired = self.outbox_repository.delete_dead_letters_older_than(
+            now - timedelta(hours=get_outbox_dead_letter_retention_hours()))
+        if expired:
+            logger.warning("Purged %s quarantined outbox records past retention", expired)

@@ -7,8 +7,9 @@ import logging
 import os
 from typing import Callable
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlparse
 from urllib.request import Request, urlopen
+
+from shared.infrastructure.environment import get_core_base_url, get_core_http_timeout, get_edge_to_core_token
 
 logger = logging.getLogger(__name__)
 
@@ -18,12 +19,9 @@ class CorePresenceHttpPublisher:
 
     def __init__(self, base_url: str | None = None, token: str | None = None,
                  timeout: float | None = None, opener: Callable[..., object] | None = None) -> None:
-        self.base_url = (base_url or os.getenv("CLAIR_CORE_BASE_URL", "https://127.0.0.1:8080")).rstrip("/")
-        parsed = urlparse(self.base_url)
-        if parsed.scheme.lower() != "https" and parsed.hostname not in {"localhost", "127.0.0.1", "::1"}:
-            raise ValueError("CLAIR_CORE_BASE_URL must use HTTPS outside localhost")
-        self.token = token if token is not None else os.getenv("EDGE_TO_CORE_TOKEN", "")
-        self.timeout = timeout if timeout is not None else float(os.getenv("CLAIR_CORE_HTTP_TIMEOUT", "10"))
+        self.base_url = base_url.rstrip("/") if base_url else get_core_base_url()
+        self.token = token if token is not None else get_edge_to_core_token()
+        self.timeout = timeout if timeout is not None else get_core_http_timeout()
         self._opener = opener or urlopen
 
     def publish_device_presence_changed(self, payload: dict) -> bool:

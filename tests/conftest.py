@@ -45,52 +45,10 @@ def _build_test_schema(test_db) -> None:
     in-memory target is per-connection, so closing between schema setup and
     test body would discard every table.
     """
+    from shared.infrastructure.database import apply_schema
+
     test_db.connect(reuse_if_open=True)
-    try:
-        # Deferred imports to avoid circular dependencies
-        from iam.infrastructure.models import DeviceModel
-        from device.infrastructure.models import DeviceCommandModel, DeviceTelemetryModel
-        from device.infrastructure.outbox.outbox_record_model import OutboxRecordModel
-        from device.infrastructure.outbox.outbox_payload_snapshot_model import OutboxPayloadSnapshotModel
-        from alerting.infrastructure.models import AlertIncidentEventModel
-        from shared.infrastructure.models import SyncWatermarkModel
-
-        # Inline migration logic (mirrors shared.infrastructure.database
-        # but keeps the connection open).
-        if "devices" in test_db.get_tables():
-            existing = {c.name for c in test_db.get_columns("devices")}
-            if "deleted" not in existing:
-                test_db.execute_sql(
-                    "ALTER TABLE devices ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0"
-                )
-            if "updated_at" not in existing:
-                test_db.execute_sql("ALTER TABLE devices ADD COLUMN updated_at DATETIME")
-
-        if "device_telemetry" in test_db.get_tables():
-            column_names = {c.name for c in test_db.get_columns("device_telemetry")}
-            has_legacy = bool(
-                {"wifi_ssid", "free_heap", "chip_model", "air_quality_valid", "pm_valid"}
-                & column_names
-            )
-            missing_required = not {"signal_strength", "health_status"} <= column_names
-            if has_legacy or missing_required:
-                test_db.drop_tables([DeviceTelemetryModel], safe=True)
-
-        test_db.create_tables(
-            [
-                DeviceModel,
-                DeviceTelemetryModel,
-                DeviceCommandModel,
-                OutboxRecordModel,
-                OutboxPayloadSnapshotModel,
-                AlertIncidentEventModel,
-                SyncWatermarkModel,
-            ],
-            safe=True,
-        )
-    finally:
-        # Leave the connection open for the duration of the test.
-        pass
+    apply_schema(test_db)
 
 
 @pytest.fixture(autouse=True)

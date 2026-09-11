@@ -10,34 +10,26 @@ from typing import Optional
 
 @dataclass
 class AirQualityData:
-    """Air quality sensor data."""
-    co2: float
-    temperature: float
-    humidity: float
+    """Air quality sensor data, passed through as sent; the domain validates."""
+    co2: Optional[float]
+    temperature: Optional[float]
+    humidity: Optional[float]
 
     @classmethod
     def from_dict(cls, data: dict) -> "AirQualityData":
-        return cls(
-            co2=float(data.get("co2", 0)),
-            temperature=float(data.get("temperature", 0)),
-            humidity=float(data.get("humidity", 0)),
-        )
+        return cls(co2=data.get("co2"), temperature=data.get("temperature"), humidity=data.get("humidity"))
 
 
 @dataclass
 class ParticulateMatterData:
-    """Particulate matter sensor data."""
-    pm1_0: int
-    pm2_5: int
-    pm10: int
+    """Particulate matter sensor data, passed through as sent (decimals preserved)."""
+    pm1_0: Optional[float]
+    pm2_5: Optional[float]
+    pm10: Optional[float]
 
     @classmethod
     def from_dict(cls, data: dict) -> "ParticulateMatterData":
-        return cls(
-            pm1_0=int(data.get("pm1_0", 0)),
-            pm2_5=int(data.get("pm2_5", 0)),
-            pm10=int(data.get("pm10", 0)),
-        )
+        return cls(pm1_0=data.get("pm1_0"), pm2_5=data.get("pm2_5"), pm10=data.get("pm10"))
 
 
 @dataclass
@@ -82,7 +74,9 @@ class TelemetryRequest:
       "connectivity": {"status": "connected", "network": "Wokwi-GUEST", "signalStrength": -65},
       "location": {"country": "PERU"},
       "healthStatus": 100,
-      "status": "Optimal"
+      "status": "Optimal",
+      "reading_id": "40e67f87-2c0a-47ef-a3ed-7999e106cc9c",
+      "measured_at": "2026-09-11T14:30:25.123Z"
     }
     """
     device_id: str
@@ -94,7 +88,8 @@ class TelemetryRequest:
     location: LocationData
     health_status: int
     status: str
-    created_at: Optional[str] = None
+    reading_id: Optional[str] = None
+    measured_at: Optional[str] = None
 
     @classmethod
     def from_dict(cls, data: dict) -> "TelemetryRequest":
@@ -110,7 +105,17 @@ class TelemetryRequest:
             particulate_matter=ParticulateMatterData.from_dict(data.get("particulateMatter", {})),
             connectivity=ConnectivityData.from_dict(data.get("connectivity", {})),
             location=LocationData.from_dict(data.get("location", {})),
-            health_status=int(data.get("healthStatus", 100)),
+            health_status=data.get("healthStatus"),
             status=str(data.get("status", "unknown")),
-            created_at=data.get("created_at") if data.get("created_at") else None,
+            reading_id=_first(data, "reading_id", "readingId"),
+            # ``created_at`` is the pre-v1 name for the same instant.
+            measured_at=_first(data, "measured_at", "measuredAt", "created_at"),
         )
+
+
+def _first(data: dict, *keys: str) -> Optional[str]:
+    for key in keys:
+        value = data.get(key)
+        if value not in (None, ""):
+            return str(value)
+    return None

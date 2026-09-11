@@ -1,17 +1,17 @@
-"""Transport-neutral ACL interface for communication with clair-core."""
+"""CoreContextFacade — port the Device context uses to reach clair-core."""
 
 from abc import ABC, abstractmethod
 
+from device.application.outboundservices.acl.delivery_result import DeliveryResult
+
 
 class CoreContextFacade(ABC):
-    """Anti-corruption layer facade for core integration."""
+    """Outbound port; implementations classify every attempt as a DeliveryResult."""
 
     @abstractmethod
-    def publish_telemetry_recorded(self, payload: dict) -> bool:
-        """Publish a telemetry integration event to clair-core."""
-        ...
+    def publish_telemetry_recorded(self, payload: dict) -> DeliveryResult:
+        """Deliver one immutable telemetry record (contract v1 batch of one)."""
 
     @abstractmethod
-    def publish_command_acknowledged(self, payload: dict) -> bool:
-        """Deliver a queued command ACK integration event asynchronously to clair-core."""
-        ...
+    def publish_command_acknowledged(self, payload: dict) -> DeliveryResult:
+        """Deliver one command acknowledgement."""
