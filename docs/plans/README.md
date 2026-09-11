@@ -1,28 +1,15 @@
-# Planes de migración core↔edge — puntero
+# Integration plans — pointer
 
-Este repositorio no duplica los planes de migración. La fuente única de
-verdad vive en `/home/giks/projects/IOT/clair-core/docs/plans/` (o en
-`../clair-core/docs/plans/` desde esta raíz).
+This repository does not duplicate integration plans. The authoritative documents live in the
+sibling checkouts; links below are relative to this file and assume the three repositories sit in
+one parent directory (`Clair/clair-core`, `Clair/edge`, `Clair/embedded`).
 
-Los documentos describen cambios coordinados entre ambos repositorios:
+| Document | Location | Content |
+|---|---|---|
+| Implementation plan | [`../../../IMPLEMENTATION_PLAN.md`](../../../IMPLEMENTATION_PLAN.md) | Phased laptop deployment and contract alignment across core, edge and embedded. |
+| Edge contract v1 | [`../../../clair-core/docs/contracts/edge-v1/README.md`](../../../clair-core/docs/contracts/edge-v1/README.md) | Frozen HTTP contracts core ↔ edge and device ↔ edge, with JSON fixtures. |
+| Core behaviour backlog | [`../../../clair-core/docs/audit/backlog.md`](../../../clair-core/docs/audit/backlog.md) | Core-side domain items the edge depends on (B7.x). |
 
-| Plan | Contenido |
-|---|---|
-| `00-overview.md` | Diagnóstico y arquitectura objetivo. |
-| `01-transporte.md` | Inventario de componentes sustituidos y conservados. |
-| `02-sincronizacion-devices.md` | Roster incremental, watermark y reconciliación. |
-| `03-contratos-http-core-edge.md` | Contratos HTTP entre servicios. |
-| `04-plan-de-corte.md` | Fases, verificaciones y rollback. |
-| `05-actualizacion-documentacion.md` | Actualización de documentación técnica. |
-
-Para trabajar únicamente en edge, el plan 04 cubre el orden seguro de
-preparación, migraciones SQLite, configuración de secretos, arranque de
-pollers, transporte HTTP del outbox y rollback acotado. Los planes 02 y 03
-definen los payloads, cursores, endpoints y semántica de reintento que usan
-los adaptadores del edge.
-
-La documentación de este repositorio refleja el estado operativo actual:
-los cambios core→edge se recuperan mediante polling con watermark persistido,
-las notificaciones son una optimización de latencia y los flujos edge→core
-usan HTTP autenticado. No se mantienen copias locales de los planes para
-prevenir divergencias entre repositorios.
+Operational summary of this repository: core → edge changes are recovered by polling with a
+persisted watermark, the core notification is a latency optimisation only, and every edge → core
+flow is authenticated HTTP. Kafka is not used.
