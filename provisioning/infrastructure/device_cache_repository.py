@@ -2,6 +2,8 @@
 
 from datetime import datetime, timezone
 
+from device.domain.entities import EdgeDeviceCommandStatus
+from device.infrastructure.models import DeviceCommandModel
 from iam.infrastructure.models import DeviceModel
 
 
@@ -19,6 +21,20 @@ class DeviceCacheRepository:
             return parse(incoming) >= parse(current)
         except (TypeError, ValueError):
             return str(incoming) >= str(current)
+
+    @staticmethod
+    def _expire_commands_for_other_generations(device_id: str, current_assignment_id) -> int:
+        outstanding = (
+            (DeviceCommandModel.device_id == device_id)
+            & (DeviceCommandModel.status << [
+                EdgeDeviceCommandStatus.RECEIVED.value,
+                EdgeDeviceCommandStatus.DELIVERED_TO_EMBEDDED.value,
+            ])
+            & DeviceCommandModel.assignment_id.is_null(False)
+        )
+        if current_assignment_id is not None:
+            outstanding &= DeviceCommandModel.assignment_id != str(current_assignment_id)
+        return DeviceCommandModel.update(status=EdgeDeviceCommandStatus.EXPIRED.value).where(outstanding).execute()
 
     def delete_by_device_id(self, device_id: str, updated_at=None) -> None:
         """Apply a tombstone without physically removing the cache row."""
@@ -38,7 +54,12 @@ class DeviceCacheRepository:
                 device.get("updated_at"), current.updated_at
             ):
                 continue
+            incoming_assignment = device.get("assignment_id")
+            if current is not None and (current.assignment_id or None) != (incoming_assignment or None):
+                # A new pairing generation (or an unlink): commands cached for the old one are void.
+                self._expire_commands_for_other_generations(device["device_id"], incoming_assignment)
             update = {
+                DeviceModel.assignment_id: incoming_assignment,
                 DeviceModel.hardware_id: device["hardware_id"],
                 DeviceModel.api_key: device["api_key"],
                 DeviceModel.status: device["status"],
@@ -55,6 +76,7 @@ class DeviceCacheRepository:
                 last_seen_at=None,
                 deleted=device.get("deleted", False),
                 updated_at=device.get("updated_at"),
+                assignment_id=incoming_assignment,
             ).on_conflict(
                 conflict_target=[DeviceModel.device_id],
                 preserve=[DeviceModel.created_at, DeviceModel.last_seen_at],

@@ -23,11 +23,13 @@ def get_pending_alert_incidents_for_embedded():
         X-API-Key: embedded device secret.
 
     Returns:
-        200: Pending alert incident events, marked as delivered.
-             Payload is intentionally minimal for embedded consumption.
+        200: Pending transitions, oldest first, each leased for redelivery until acked
+             (``id`` is the edge-local transition id to ack; ``alert_id``/``sequence``
+             identify the core alert and its state). An empty page means "nothing new",
+             never "no active incidents".
         401: Missing or invalid device credentials.
     """
-    auth_error = authenticate_request(update_last_seen=False)
+    auth_error = authenticate_request(touch=True)
     if auth_error is not None:
         return auth_error
 

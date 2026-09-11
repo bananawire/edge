@@ -25,6 +25,8 @@ class EdgeDeviceCommandStatus(str, Enum):
     DELIVERED_TO_EMBEDDED = "DELIVERED_TO_EMBEDDED"
     EXECUTED = "EXECUTED"
     FAILED = "FAILED"
+    # Voided locally because the device was unlinked or reassigned; never delivered again.
+    EXPIRED = "EXPIRED"
 
 
 class DeviceTelemetry:
@@ -134,6 +136,7 @@ class DeviceCommand:
         received_at: datetime,
         delivered_at: Optional[datetime] = None,
         failure_reason: Optional[str] = None,
+        assignment_id: Optional[str] = None,
     ):
         if not command_id:
             raise ValueError("command_id is required")
@@ -157,10 +160,16 @@ class DeviceCommand:
         self.received_at = received_at
         self.delivered_at = delivered_at
         self.failure_reason = failure_reason
+        self.assignment_id = assignment_id
 
     def mark_delivered_to_embedded(self, delivered_at: datetime) -> None:
         self.status = EdgeDeviceCommandStatus.DELIVERED_TO_EMBEDDED
         self.delivered_at = delivered_at
+
+    def expire(self) -> None:
+        """Void a command that can no longer be delivered; terminal states are left alone."""
+        if self.status in (EdgeDeviceCommandStatus.RECEIVED, EdgeDeviceCommandStatus.DELIVERED_TO_EMBEDDED):
+            self.status = EdgeDeviceCommandStatus.EXPIRED
 
     def mark_executed(self) -> None:
         self.status = EdgeDeviceCommandStatus.EXECUTED

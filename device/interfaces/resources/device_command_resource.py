@@ -27,6 +27,7 @@ def device_command_to_dict(command) -> dict:
     return {
         "commandId": command.command_id,
         "deviceId": command.device_id,
+        "assignmentId": command.assignment_id,
         "hardwareId": command.hardware_id,
         "type": command.command_type.value,
         "status": command.status.value,

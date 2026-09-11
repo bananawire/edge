@@ -8,6 +8,7 @@ from peewee import (
     AutoField,
     CharField,
     DateTimeField,
+    IntegerField,
     Model,
 )
 
@@ -24,6 +25,8 @@ class AlertIncidentEventModel(Model):
 
     # Values from core integration event.
     alert_id = CharField(index=True)
+    # Core transition sequence; one row per transition. Null only on rows older than contract v1.
+    sequence = IntegerField(null=True)
     device_id = CharField(index=True)
     space_id = CharField(null=True)
     metric = CharField()
@@ -44,4 +47,5 @@ class AlertIncidentEventModel(Model):
         indexes = (
             (("hardware_id", "delivered_at"), False),
             (("hardware_id", "received_at"), False),
+            (("alert_id", "sequence"), True),
         )

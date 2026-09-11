@@ -56,4 +56,5 @@ class DeviceProvisioningApplicationService:
             "status": payload.get("status"),
             "deleted": bool(payload.get("deleted", False)),
             "updated_at": payload.get("updated_at") or payload.get("updatedAt"),
+            "assignment_id": payload.get("assignment_id") or payload.get("assignmentId"),
         }

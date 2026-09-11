@@ -143,9 +143,12 @@ class TelemetryOutboxProcessor:
             logger.error("Outbox entry %s quarantined: %s", entry.id, exc)
             return False
 
-        publisher = (self.external_core_service.publish_command_acknowledged
-                     if entry.event_type == "COMMAND_ACKNOWLEDGED"
-                     else self.external_core_service.publish_telemetry_recorded)
+        publisher_names = {
+            "COMMAND_ACKNOWLEDGED": "publish_command_acknowledged",
+            "PRESENCE_CHANGED": "publish_presence_changed",
+            "TELEMETRY_RECORDED": "publish_telemetry_recorded",
+        }
+        publisher = getattr(self.external_core_service, publisher_names[entry.event_type])
         try:
             result = self.circuit_breaker.call(self._deliver, publisher, payload)
         except CircuitBreakerOpenException:
@@ -194,11 +197,8 @@ class TelemetryOutboxProcessor:
 
     def _build_payload(self, entry: OutboxEntry) -> dict:
         """Return the immutable snapshot, rejecting legacy rows explicitly."""
-        if entry.aggregate_type not in {"COMMAND", "TELEMETRY"}:
-            raise ValueError(f"Unsupported outbox event: {entry.aggregate_type}/{entry.event_type}")
-        expected_event = ("COMMAND_ACKNOWLEDGED" if entry.aggregate_type == "COMMAND"
-                          else "TELEMETRY_RECORDED")
-        if entry.event_type != expected_event:
+        expected = {"COMMAND": "COMMAND_ACKNOWLEDGED", "TELEMETRY": "TELEMETRY_RECORDED", "PRESENCE": "PRESENCE_CHANGED"}
+        if expected.get(entry.aggregate_type) != entry.event_type:
             raise ValueError(f"Unsupported outbox event: {entry.aggregate_type}/{entry.event_type}")
         if not getattr(entry, "payload", None):
             raise LegacyOutboxPayloadUnavailableError(

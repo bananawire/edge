@@ -10,7 +10,7 @@ from urllib.parse import quote
 from urllib.request import Request, urlopen
 
 from device.application.outboundservices.acl.core_context_facade import CoreContextFacade
-from device.application.outboundservices.acl.delivery_result import DeliveryResult
+from device.application.outboundservices.acl.delivery_result import DeliveryOutcome, DeliveryResult
 from shared.infrastructure.environment import get_core_base_url, get_core_http_timeout, get_edge_to_core_token
 
 logger = logging.getLogger(__name__)
@@ -73,6 +73,21 @@ class HttpCoreContextFacadeImpl(CoreContextFacade):
             return DeliveryResult.delivered_ok()
         if status == 404:
             return DeliveryResult.rejected("core: command unknown or not owned by this unit")
+        return DeliveryResult.from_http_status(status, detail if isinstance(detail, str) else "")
+
+    def publish_presence_changed(self, payload: dict) -> DeliveryResult:
+        """Presence is news, not a record: core refusing it (unclaimed device, bad status) is final
+        and not worth quarantining, so 4xx other than auth counts as delivered-and-dropped."""
+        status, detail = self._post("/api/v1/edge/presence", payload)
+        if status is None:
+            return DeliveryResult.retry(detail)
+        if 200 <= status < 300:
+            return DeliveryResult.delivered_ok()
+        if status in (401, 403):
+            return DeliveryResult.from_http_status(status, detail if isinstance(detail, str) else "")
+        if 400 <= status < 500:
+            logger.warning("Core dropped presence for %s: HTTP %s %s", payload.get("hardware_id"), status, detail)
+            return DeliveryResult(DeliveryOutcome.DELIVERED, f"dropped by core: HTTP {status}")
         return DeliveryResult.from_http_status(status, detail if isinstance(detail, str) else "")
 
     def _post(self, path: str, body: dict):

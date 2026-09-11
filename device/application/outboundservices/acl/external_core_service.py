@@ -16,3 +16,6 @@ class ExternalCoreService:
 
     def publish_command_acknowledged(self, payload: dict) -> DeliveryResult:
         return self._facade.publish_command_acknowledged(payload)
+
+    def publish_presence_changed(self, payload: dict) -> DeliveryResult:
+        return self._facade.publish_presence_changed(payload)

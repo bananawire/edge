@@ -273,60 +273,48 @@ class HttpAdapterTests(unittest.TestCase):
         self.assertEqual(DeviceCommandPoller(client, Service()).poll_once(), 1)
         self.assertEqual(client.acks, [])
 
-    def test_alert_transition_is_updated_and_redelivered_to_embedded(self):
+    def test_alert_transition_is_stored_as_a_new_row_and_duplicates_are_ignored(self):
         service = AlertIncidentEventApplicationService()
-        service._repository = MagicMock()
-        existing = SimpleNamespace(id=7, status="ACTIVE")
-        service._repository.find_by_alert_id.return_value = existing
-        service._repository.update_from_integration_payload.return_value = SimpleNamespace(id=7)
-        payload = {
-            "alert_id": "alert-1",
-            "device_id": "device-1",
-            "hardware_id": "HW-1",
-            "metric": "CO2",
-            "status": "RESOLVED",
-            "occurred_at": "2024-01-01T00:00:00Z",
-            "resolved_at": "2024-01-01T00:05:00Z",
+        base = {
+            "alert_id": "alert-1", "device_id": "device-1", "hardware_id": "HW-1", "metric": "CO2",
+            "status": "ACTIVE", "occurred_at": "2024-01-01T00:00:00Z", "sequence": 5,
         }
+        first = service.ingest_alert_incident_changed_event(base)
+        again = service.ingest_alert_incident_changed_event(base)
+        resolved = service.ingest_alert_incident_changed_event({**base, "status": "RESOLVED",
+                                                                "resolved_at": "2024-01-01T00:05:00Z", "sequence": 9})
+        self.assertTrue(first.stored)
+        self.assertFalse(again.stored)
+        self.assertEqual(again.event_id, first.event_id)
+        self.assertTrue(resolved.stored)
+        self.assertNotEqual(resolved.event_id, first.event_id)
+        pending = service.get_pending_for_embedded("HW-1")
+        self.assertEqual([(e["alert_id"], e["sequence"], e["status"]) for e in pending],
+                         [("alert-1", 5, "ACTIVE"), ("alert-1", 9, "RESOLVED")])
 
-        with patch(
-            "alerting.application.services.alert_incident_event_application_service.db.atomic"
-        ):
-            result = service.ingest_alert_incident_changed_event(payload)
-
-        self.assertTrue(result.stored)
-        updated_payload = service._repository.update_from_integration_payload.call_args.args[1]
-        self.assertEqual(updated_payload["status"], "RESOLVED")
-        self.assertIsNotNone(updated_payload["resolved_at"])
-
-        existing.status = "RESOLVED"
-        service._repository.update_from_integration_payload.reset_mock()
-        with patch(
-            "alerting.application.services.alert_incident_event_application_service.db.atomic"
-        ):
-            duplicate = service.ingest_alert_incident_changed_event(payload)
-        self.assertFalse(duplicate.stored)
-        service._repository.update_from_integration_payload.assert_not_called()
-
-    def test_alert_poller_ingests_each_payload(self):
+    def test_alert_poller_sends_receipts_not_business_acks_and_advances_its_cursor(self):
         class Client:
-            def get(self, path):
-                self.path = path
-                return [{"alert_id": "a", "device_id": "d", "hardware_id": "h", "occurred_at": "2024-01-01T00:00:00Z"}]
+            def __init__(self): self.posts = []; self.gets = []
+            def get(self, path, params=None):
+                self.gets.append((path, params))
+                return [{"alert_id": "a", "sequence": 7, "device_id": "d", "hardware_id": "h",
+                         "status": "ACTIVE", "occurred_at": "2024-01-01T00:00:00Z"}]
             def post(self, path, body, accept_conflict=False):
-                self.ack = (path, body, accept_conflict)
+                self.posts.append((path, body))
                 return {}
         class Service:
             def ingest_alert_incident_changed_event(self, payload):
                 self.payload = payload
-                return type("Result", (), {"stored": True})()
+                return type("Result", (), {"stored": True, "event_id": 1, "sequence": 7})()
         service = Service()
         client = Client()
-        self.assertEqual(AlertIncidentPoller(client, service).poll_once(), 1)
-        self.assertEqual(service.payload["alert_id"], "a")
-        self.assertEqual(client.ack[0], "/api/v1/edge/alerts/a/ack")
-        self.assertEqual(client.ack[1]["hardware_id"], "h")
-        self.assertTrue(client.ack[2])
+        poller = AlertIncidentPoller(client, service)
+        self.assertEqual(poller.poll_once(), 1)
+        self.assertEqual(client.gets[0][1]["after_sequence"], None)
+        self.assertEqual(client.posts, [("/api/v1/edge/alerts/a/receipt", {"hardware_id": "h", "sequence": 7})])
+        self.assertEqual(poller.cursor, 7)
+        poller.poll_once()
+        self.assertEqual(client.gets[1][1]["after_sequence"], 7)
 
     def test_notify_auth_validation_and_async_resource_triggers(self):
         import os

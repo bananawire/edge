@@ -36,6 +36,34 @@ else:
     db = TursoDatabase(database=get_edge_database_path(), auth_token="")
 
 
+ADDITIVE_COLUMNS = {
+    "devices": {
+        "assignment_id": "ALTER TABLE devices ADD COLUMN assignment_id VARCHAR(255)",
+    },
+    "device_commands": {
+        "assignment_id": "ALTER TABLE device_commands ADD COLUMN assignment_id VARCHAR(255)",
+    },
+    "alert_incident_events": {
+        "sequence": "ALTER TABLE alert_incident_events ADD COLUMN sequence INTEGER",
+    },
+}
+
+
+def _migrate_additive_columns(database):
+    """Add contract-v1 columns to whichever of these tables already exist; rows are untouched."""
+    tables = set(database.get_tables())
+    applied = []
+    for table, columns in ADDITIVE_COLUMNS.items():
+        if table not in tables:
+            continue
+        existing = {c.name for c in database.get_columns(table)}
+        for column, ddl in columns.items():
+            if column not in existing:
+                database.execute_sql(ddl)
+                applied.append(f"{table}.{column}")
+    return applied
+
+
 def _migrate_device_cache_schema(database):
     """Add roster columns without dropping data from existing edge databases."""
     if "devices" not in database.get_tables():
@@ -121,6 +149,9 @@ def _needs_migration(database) -> bool:
         columns = {c.name for c in database.get_columns("device_telemetry")}
         if LEGACY_TELEMETRY_COLUMNS & columns or not set(TELEMETRY_ADDITIVE_COLUMNS) <= columns:
             return True
+    for table, columns in ADDITIVE_COLUMNS.items():
+        if table in tables and not set(columns) <= {c.name for c in database.get_columns(table)}:
+            return True
     return False
 
 
@@ -145,6 +176,7 @@ def apply_schema(database, database_path: str | None = None):
     with database.atomic():
         applied += _migrate_device_cache_schema(database)
         applied += _migrate_telemetry_schema(database)
+        applied += _migrate_additive_columns(database)
         database.create_tables(
             [
                 DeviceModel,
@@ -158,6 +190,10 @@ def apply_schema(database, database_path: str | None = None):
             safe=True,
         )
         _ensure_telemetry_identity_index(database)
+        database.execute_sql(
+            "CREATE UNIQUE INDEX IF NOT EXISTS alert_incident_events_alert_id_sequence "
+            "ON alert_incident_events (alert_id, sequence)"
+        )
     if applied:
         logger.info("Edge schema migrations applied: %s", ", ".join(applied))
     return applied

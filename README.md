@@ -193,6 +193,7 @@ Variables relevantes:
 | `EDGE_ALERT_POLL_INTERVAL_SECONDS` | `5` | Intervalo de alertas |
 | `EDGE_PRESENCE_POLL_INTERVAL_SECONDS` | `5` | Intervalo de presencia |
 | `EDGE_OUTBOX_POLL_INTERVAL_SECONDS` | `5` | Intervalo del outbox |
+| `EDGE_ALERT_DELIVERY_LEASE_SECONDS` | `120` | Reentrega de transiciones de alerta al dispositivo si no llega su ACK |
 | `EDGE_PUBLIC_BASE_URL` | `http://127.0.0.1:5000` | Base URL para el OpenAPI `servers` (docs) |
 
 Este proyecto soporta archivo `.env` (cargado al iniciar via `python-dotenv`). Usa `.env.example` como base.

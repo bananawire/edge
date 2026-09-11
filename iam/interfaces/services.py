@@ -14,7 +14,7 @@ auth_service = AuthApplicationService()
 device_presence_service = DevicePresenceApplicationService()
 
 
-def authenticate_request(update_last_seen: bool = False):
+def authenticate_request(update_last_seen: bool = False, touch: bool = False):
     """Authenticate the current HTTP request using device credentials.
 
     Extracts hardware_id from the X-Hardware-Id header and api_key
@@ -36,4 +36,7 @@ def authenticate_request(update_last_seen: bool = False):
 
     if update_last_seen:
         device_presence_service.mark_seen(hardware_id)
+    elif touch:
+        # Polls are a heartbeat: the unit is reachable even while it sends no telemetry (standby).
+        device_presence_service.touch(hardware_id)
     return None

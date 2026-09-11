@@ -171,6 +171,7 @@ class DeviceCommandRepository:
         DeviceCommandModel.insert(
             command_id=command.command_id,
             device_id=command.device_id,
+            assignment_id=command.assignment_id,
             hardware_id=command.hardware_id,
             command_type=command.command_type.value,
             status=command.status.value,
@@ -197,13 +198,39 @@ class DeviceCommandRepository:
         except DeviceCommandModel.DoesNotExist:
             return None
 
-    def find_pending_for_hardware_id(self, hardware_id: str) -> list[DeviceCommand]:
-        """Find new commands and delivered commands whose lease expired."""
+    def expire_outstanding_for_other_assignments(self, device_id: str, current_assignment_id) -> int:
+        """Void cached commands issued under a generation other than ``current_assignment_id``.
+
+        Called when the roster reports a new (or no) assignment for a device: whatever was queued
+        for the previous owner must never reach the embedded unit. Unbound legacy rows are kept.
+        """
+        outstanding = (
+            (DeviceCommandModel.device_id == device_id)
+            & (DeviceCommandModel.status << [
+                EdgeDeviceCommandStatus.RECEIVED.value,
+                EdgeDeviceCommandStatus.DELIVERED_TO_EMBEDDED.value,
+            ])
+            & DeviceCommandModel.assignment_id.is_null(False)
+        )
+        if current_assignment_id is not None:
+            outstanding &= DeviceCommandModel.assignment_id != str(current_assignment_id)
+        return (
+            DeviceCommandModel.update(status=EdgeDeviceCommandStatus.EXPIRED.value)
+            .where(outstanding)
+            .execute()
+        )
+
+    def find_pending_for_hardware_id(self, hardware_id: str, current_assignment_id=None) -> list[DeviceCommand]:
+        """Find new commands and delivered commands whose lease expired, for the current generation only."""
         lease_expiry = datetime.now(timezone.utc) - timedelta(seconds=self.DELIVERY_LEASE_SECONDS)
+        generation = DeviceCommandModel.assignment_id.is_null()
+        if current_assignment_id is not None:
+            generation = generation | (DeviceCommandModel.assignment_id == str(current_assignment_id))
         query = (
             DeviceCommandModel.select()
             .where(
                 (DeviceCommandModel.hardware_id == hardware_id)
+                & generation
                 & (
                     (DeviceCommandModel.status == EdgeDeviceCommandStatus.RECEIVED.value)
                     | (
@@ -272,4 +299,5 @@ class DeviceCommandRepository:
             received_at=model.received_at,
             delivered_at=model.delivered_at,
             failure_reason=model.failure_reason,
+            assignment_id=model.assignment_id,
         )

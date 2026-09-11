@@ -18,7 +18,7 @@ class Device:
     """
 
     def __init__(self, device_id, hardware_id, api_key, status, created_at,
-                 last_seen_at=None, deleted=False):
+                 last_seen_at=None, deleted=False, assignment_id=None):
         self.device_id = device_id
         self.hardware_id = hardware_id
         self.api_key = api_key
@@ -26,3 +26,4 @@ class Device:
         self.created_at = created_at
         self.last_seen_at = last_seen_at
         self.deleted = deleted
+        self.assignment_id = assignment_id

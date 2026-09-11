@@ -98,6 +98,14 @@ def get_outbox_dead_letter_retention_hours() -> float:
         return 168.0
 
 
+def get_alert_delivery_lease_seconds() -> float:
+    """How long an incident transition handed to the device waits for its ack before redelivery."""
+    try:
+        return max(float(os.getenv("EDGE_ALERT_DELIVERY_LEASE_SECONDS", "120")), 5.0)
+    except ValueError:
+        return 120.0
+
+
 def get_positive_interval(name: str, default: float, minimum: float = 0.1) -> float:
     """Read a worker interval safely, preventing a busy loop from bad config."""
     raw = os.getenv(name)

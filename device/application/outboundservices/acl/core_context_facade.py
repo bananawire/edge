@@ -15,3 +15,7 @@ class CoreContextFacade(ABC):
     @abstractmethod
     def publish_command_acknowledged(self, payload: dict) -> DeliveryResult:
         """Deliver one command acknowledgement."""
+
+    @abstractmethod
+    def publish_presence_changed(self, payload: dict) -> DeliveryResult:
+        """Deliver one presence transition (device_id, hardware_id, status, occurred_at)."""

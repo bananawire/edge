@@ -99,6 +99,17 @@ class OutboxRepository:
             error_message=error,
         ).where(OutboxRecordModel.id == entry_id).execute()
 
+    def discard_pending(self, aggregate_type: str, aggregate_id) -> int:
+        """Drop pending entries of one aggregate (coalescing); sent and quarantined rows stay."""
+        ids = [row.id for row in OutboxRecordModel.select(OutboxRecordModel.id).where(
+            (OutboxRecordModel.aggregate_type == aggregate_type)
+            & (OutboxRecordModel.aggregate_id == str(aggregate_id))
+            & (OutboxRecordModel.status == "pending"))]
+        if not ids:
+            return 0
+        OutboxPayloadSnapshotModel.delete().where(OutboxPayloadSnapshotModel.outbox_id << ids).execute()
+        return OutboxRecordModel.delete().where(OutboxRecordModel.id << ids).execute()
+
     def find_dead_letters(self, limit: int = 100) -> List[OutboxEntry]:
         """Quarantined entries, oldest first, for inspection and replay."""
         query = (

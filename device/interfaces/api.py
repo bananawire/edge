@@ -118,7 +118,7 @@ def get_pending_device_commands_for_embedded():
         200: Pending commands, marked as delivered to the embedded device.
         401: Missing or invalid device credentials.
     """
-    auth_error = authenticate_request()
+    auth_error = authenticate_request(touch=True)
     if auth_error is not None:
         return auth_error
 

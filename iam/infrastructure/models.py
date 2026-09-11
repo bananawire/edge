@@ -29,6 +29,9 @@ class DeviceModel(Model):
     # Tombstones remain locally so the roster can be replayed safely.
     deleted = BooleanField(default=False)
     updated_at = DateTimeField(null=True)
+    # Current pairing generation from the roster; null while unclaimed. When it changes, cached
+    # commands issued under the previous generation are void.
+    assignment_id = CharField(null=True)
 
     class Meta:
         database = db

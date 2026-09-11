@@ -69,6 +69,7 @@ class DeviceCommandModel(Model):
 
     command_id = CharField(primary_key=True)
     device_id = CharField(index=True)
+    assignment_id = CharField(null=True)
     hardware_id = CharField(index=True)
     command_type = CharField()
     status = CharField(index=True)

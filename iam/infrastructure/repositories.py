@@ -41,9 +41,16 @@ class DeviceRepository:
                 created_at=model.created_at,
                 last_seen_at=model.last_seen_at,
                 deleted=model.deleted,
+                assignment_id=model.assignment_id,
             )
         except DeviceModel.DoesNotExist:
             return None
+
+    def touch(self, hardware_id) -> bool:
+        """Refresh last_seen_at only: a poll proves reachability without changing the status."""
+        return DeviceModel.update(last_seen_at=datetime.now(timezone.utc)).where(
+            DeviceModel.hardware_id == hardware_id
+        ).execute() == 1
 
     def update_last_seen(self, hardware_id):
         """Update last_seen_at and mark the device ONLINE.
@@ -104,6 +111,7 @@ class DeviceRepository:
                 created_at=model.created_at,
                 last_seen_at=model.last_seen_at,
                 deleted=model.deleted,
+                assignment_id=model.assignment_id,
             )
         except DeviceModel.DoesNotExist:
             return None
@@ -120,6 +128,7 @@ class DeviceRepository:
                 created_at=model.created_at,
                 last_seen_at=model.last_seen_at,
                 deleted=model.deleted,
+                assignment_id=model.assignment_id,
             )
         except DeviceModel.DoesNotExist:
             return None

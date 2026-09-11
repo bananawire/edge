@@ -169,6 +169,7 @@ class DeviceCommandApplicationService:
                 device_id = item.get("deviceId") or item.get("device_id")
                 command_id = item.get("id") or item.get("commandId") or item.get("command_id")
                 command_type = item.get("type") or item.get("commandType") or item.get("command_type")
+                assignment_id = item.get("assignment_id") or item.get("assignmentId")
                 payload = item.get("payload")
 
                 if not device_id or not command_id or not command_type:
@@ -178,6 +179,11 @@ class DeviceCommandApplicationService:
                 device = self.device_repository.find_by_device_id(device_id)
                 if device is None:
                     logger.warning("Skipping command %s for unknown device %s", command_id, device_id)
+                    continue
+                if assignment_id and device.assignment_id and str(assignment_id) != str(device.assignment_id):
+                    # Issued under a generation the roster no longer reports: void on arrival.
+                    logger.warning("Skipping command %s: assignment %s is not current for %s",
+                                   command_id, assignment_id, device_id)
                     continue
 
                 existing = self.command_repository.find_by_command_id(command_id)
@@ -193,14 +199,17 @@ class DeviceCommandApplicationService:
                     status=EdgeDeviceCommandStatus.RECEIVED,
                     payload=payload,
                     received_at=datetime.now(timezone.utc),
+                    assignment_id=str(assignment_id) if assignment_id else None,
                 )
                 persisted.append(self.command_repository.save(device_command))
 
         return persisted
 
     def get_pending_commands_for_embedded(self, hardware_id: str) -> list[DeviceCommand]:
-        """Return commands pending for an embedded device and mark them delivered."""
-        commands = self.command_repository.find_pending_for_hardware_id(hardware_id)
+        """Return commands pending for an embedded device (current generation only) and mark them delivered."""
+        device = self.device_repository.find_by_hardware_id(hardware_id)
+        current_assignment_id = device.assignment_id if device is not None else None
+        commands = self.command_repository.find_pending_for_hardware_id(hardware_id, current_assignment_id)
         return self.command_repository.mark_commands_delivered(commands)
 
     def acknowledge_embedded_command(self, command: AcknowledgeEmbeddedDeviceCommandCommand) -> DeviceCommand:
@@ -229,7 +238,10 @@ class DeviceCommandApplicationService:
             if existing.status in (
                 EdgeDeviceCommandStatus.EXECUTED,
                 EdgeDeviceCommandStatus.FAILED,
+                EdgeDeviceCommandStatus.EXPIRED,
             ):
+                # Terminal locally. An EXPIRED command was voided by a reassignment; its result
+                # belongs to nobody and is not forwarded.
                 return existing
             if existing.status != EdgeDeviceCommandStatus.DELIVERED_TO_EMBEDDED:
                 raise ValueError("Device command has not been delivered")
@@ -257,6 +269,7 @@ class DeviceCommandApplicationService:
                 if terminal is not None and terminal.status in (
                     EdgeDeviceCommandStatus.EXECUTED,
                     EdgeDeviceCommandStatus.FAILED,
+                    EdgeDeviceCommandStatus.EXPIRED,
                 ):
                     return terminal
                 raise ValueError("Device command state changed concurrently")
