@@ -56,4 +56,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
 urllib.request.urlopen('http://127.0.0.1:%s/health' % os.environ.get('PORT', '5000'), timeout=3).read()" \
     || exit 1
 
-ENTRYPOINT ["sh", "-c", "exec python app.py"]
+ENTRYPOINT ["sh", "-c", "exec waitress-serve --listen=0.0.0.0:${PORT} --threads=8 wsgi:app"]

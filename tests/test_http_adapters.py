@@ -316,6 +316,35 @@ class HttpAdapterTests(unittest.TestCase):
         poller.poll_once()
         self.assertEqual(client.gets[1][1]["after_sequence"], 7)
 
+    def test_start_workers_runs_once_and_readiness_reports_roster_age(self):
+        import app as edge_app
+        original = (edge_app._initialized, edge_app._device_roster_poller)
+        starts = []
+        class Worker:
+            def __init__(self, name): self.name = name
+            def start(self): starts.append(self.name)
+        try:
+            edge_app._initialized = False
+            edge_app._outbox_processor = Worker("outbox")
+            edge_app._device_presence_monitor = Worker("presence")
+            edge_app._device_roster_poller = Worker("roster")
+            edge_app._command_poller = Worker("commands")
+            edge_app._alert_poller = Worker("alerts")
+            with patch("app.init_db"):
+                self.assertTrue(edge_app.start_workers())
+                self.assertFalse(edge_app.start_workers())
+            self.assertEqual(sorted(starts), ["alerts", "commands", "outbox", "presence", "roster"])
+            client = edge_app.app.test_client()
+            self.assertEqual(client.get("/health").status_code, 200)
+            not_ready = client.get("/ready")
+            self.assertEqual(not_ready.status_code, 503)
+            self.assertFalse(not_ready.get_json()["checks"]["roster"])
+            import time as _time
+            edge_app._device_roster_poller.last_success_at = _time.time()
+            self.assertEqual(client.get("/ready").status_code, 200)
+        finally:
+            edge_app._initialized, edge_app._device_roster_poller = original
+
     def test_notify_auth_validation_and_async_resource_triggers(self):
         import os
         import app as edge_app

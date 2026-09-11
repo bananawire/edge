@@ -24,6 +24,7 @@ class DeviceRosterPoller:
         self.client = client or CoreHttpClient()
         self.service = service or DeviceProvisioningApplicationService()
         self.watermark = self._load_watermark()
+        self.last_success_at = None
         self._running = False
         self._thread = None
         self._trigger = threading.Event()
@@ -88,6 +89,8 @@ class DeviceRosterPoller:
                     watermark = response.get("watermark")
                     if watermark is not None and processed_pages > 0:
                         self._save_watermark(str(watermark))
+                    import time as _time
+                    self.last_success_at = _time.time()
                     return True
                 next_since = response.get("next_since", response.get("nextSince"))
                 next_after_id = response.get("next_after_id", response.get("nextAfterId"))
