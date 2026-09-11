@@ -86,15 +86,15 @@ Construye y ejecuta la imagen multi-stage con uv:
 # Build (BuildKit recomendado para caché de capas uv)
 DOCKER_BUILDKIT=1 docker build -t edge-service:dev .
 
-# Run en el puerto 49181
-docker run --rm -p 49181:49181 --env-file .env edge-service:dev
+# Run en el puerto 5000 (mismo default que la ejecución directa)
+docker run --rm -p 5000:5000 --env-file .env edge-service:dev
 ```
 
 La imagen resultante:
 
 - Usa Python 3.13-slim-bookworm con uv para resolver dependencias en un `builder` stage.
 - Crea un usuario no-root (`edge`) en el stage de runtime.
-- Escucha en el puerto `49181` (sobrescribible con `-e PORT=...`).
+- Escucha en el puerto `5000` (sobrescribible con `-e PORT=...`).
 - Incluye `HEALTHCHECK` contra `GET /health` (intervalo 30 s, 3 reintentos).
 
 Inspecciona logs:
